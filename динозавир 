@@ -1,0 +1,967 @@
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7735.h>
+#include <SPI.h>
+
+// --- ПІНИ ---
+#define TFT_CS         14
+#define TFT_RST        4
+#define TFT_DC         27
+#define TFT_BACKLIGHT  15
+#define BTN_JUMP       22
+#define BTN_DUCK       19
+
+// --- КОЛЬОРИ ---
+#define AMBER          0xFDA0
+#define AMBER_DIM      0x9880
+#define AMBER_BRIGHT   0xFEE0
+#define COL_BLACK      ST77XX_BLACK
+#define COL_RED        0xF800
+
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+
+// =============================================
+// ТЕКСТУРИ ДИНОЗАВРА
+// =============================================
+
+// БІГ кадр 1 — ліва нога вперед
+const unsigned char PROGMEM dino_run1[] = {
+  0b00000001, 0b11000000,  // гребінь
+  0b00000011, 0b11100000,
+  0b00000111, 0b11110000,  // голова
+  0b00000110, 0b01110000,  // ока западина
+  0b00001111, 0b11110000,
+  0b00001111, 0b11100000,  // щелепа
+  0b00011111, 0b10000000,  // шия
+  0b01111111, 0b11000000,  // тіло початок
+  0b11111111, 0b11000000,
+  0b11111111, 0b11000000,
+  0b01111111, 0b10000000,
+  0b00111111, 0b10000000,  // хвіст
+  0b00011111, 0b00000000,
+  0b00011000, 0b00000000,  // ліва нога вперед
+  0b00111000, 0b00000000,
+  0b00010000, 0b00000000
+};
+
+// БІГ кадр 2 — права нога вперед
+const unsigned char PROGMEM dino_run2[] = {
+  0b00000001, 0b11000000,
+  0b00000011, 0b11100000,
+  0b00000111, 0b11110000,
+  0b00000110, 0b01110000,
+  0b00001111, 0b11110000,
+  0b00001111, 0b11100000,
+  0b00011111, 0b10000000,
+  0b01111111, 0b11000000,
+  0b11111111, 0b11000000,
+  0b11111111, 0b11000000,
+  0b01111111, 0b10000000,
+  0b00111111, 0b10000000,
+  0b00011111, 0b00000000,
+  0b00010110, 0b00000000,  // права нога вперед
+  0b00010110, 0b00000000,
+  0b00000100, 0b00000000
+};
+
+// СТРИБОК — ноги підібрані
+const unsigned char PROGMEM dino_jump[] = {
+  0b00000001, 0b11000000,
+  0b00000011, 0b11100000,
+  0b00000111, 0b11110000,
+  0b00000110, 0b01110000,
+  0b00001111, 0b11110000,
+  0b00001111, 0b11100000,
+  0b00011111, 0b10000000,
+  0b01111111, 0b11000000,
+  0b11111111, 0b11000000,
+  0b11111111, 0b11000000,
+  0b01111111, 0b10000000,
+  0b00111111, 0b10000000,
+  0b00011110, 0b00000000,  // ноги підібрані
+  0b00001100, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000
+};
+
+// ПРИСІДАННЯ
+const unsigned char PROGMEM dino_duck[] = {
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000001, 0b11000000,
+  0b00000011, 0b11110000,
+  0b00000010, 0b11110000,  // ока западина
+  0b00011111, 0b11110000,
+  0b01111111, 0b11110000,
+  0b11111111, 0b11100000,
+  0b11111111, 0b11100000,
+  0b11111111, 0b11000000,
+  0b01111111, 0b10000000,
+  0b00111100, 0b00000000,
+  0b00011000, 0b00000000,
+  0b00101000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000
+};
+
+// =============================================
+// ТЕКСТУРИ КАКТУСІВ
+// =============================================
+
+// 0: малий класичний (8x16) topOffset=0
+const unsigned char PROGMEM cactus_0[] = {
+  0b00011000,
+  0b00011000,
+  0b01111000,
+  0b01111000,
+  0b11111100,
+  0b00011000,
+  0b00011100,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00111100,
+  0b00111100
+};
+
+// 1: високий тонкий (8x16) topOffset=0
+const unsigned char PROGMEM cactus_1[] = {
+  0b00001100,
+  0b00001100,
+  0b00001100,
+  0b11101100,
+  0b11111100,
+  0b00001100,
+  0b00001100,
+  0b00001111,
+  0b00001111,
+  0b00001100,
+  0b00001100,
+  0b00001100,
+  0b00001100,
+  0b00001100,
+  0b00011110,
+  0b00011110
+};
+
+// 2: широкий подвійний (16x16) topOffset=0
+const unsigned char PROGMEM cactus_2[] = {
+  0b00011000, 0b00110000,
+  0b00011000, 0b00110000,
+  0b01111000, 0b00110000,
+  0b01111100, 0b11110000,
+  0b11111111, 0b11110000,
+  0b00011111, 0b11110000,
+  0b00011000, 0b11110000,
+  0b00011000, 0b00110000,
+  0b00011000, 0b00110000,
+  0b00011000, 0b00110000,
+  0b00011000, 0b00110000,
+  0b00011000, 0b00110000,
+  0b00011000, 0b00110000,
+  0b00011000, 0b00110000,
+  0b00111100, 0b01111000,
+  0b00111100, 0b01111000
+};
+
+// 3: товстий з великими руками (8x16) topOffset=0
+const unsigned char PROGMEM cactus_3[] = {
+  0b00111100,
+  0b00111100,
+  0b11111110,
+  0b11111110,
+  0b11111110,
+  0b00111100,
+  0b00111100,
+  0b11111110,
+  0b11111110,
+  0b00111100,
+  0b00111100,
+  0b00111100,
+  0b00111100,
+  0b00111100,
+  0b01111110,
+  0b01111110
+};
+
+// 4: низький приземкуватий — можна перестрибнути низько (16x16) topOffset=8
+const unsigned char PROGMEM cactus_4[] = {
+  0b00000000, 0b00000000,  // порожньо
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b01111011, 0b11011000,  // широке тіло
+  0b11111111, 0b11111100,
+  0b11111111, 0b11111100,
+  0b01111011, 0b11011000,
+  0b00011000, 0b00110000,
+  0b00011000, 0b00110000,
+  0b00111100, 0b01111000,
+  0b00111100, 0b01111000
+};
+
+// 5: зигзаг нерівний (8x16) topOffset=0
+const unsigned char PROGMEM cactus_5[] = {
+  0b00001100,
+  0b00011100,
+  0b00011000,
+  0b01111000,
+  0b01110000,
+  0b00011000,
+  0b00011100,
+  0b00001100,
+  0b00011100,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00111100,
+  0b00111100
+};
+
+// 6: потрійний рівномірний (16x16) topOffset=0
+const unsigned char PROGMEM cactus_6[] = {
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b10100100, 0b10000000,
+  0b11111111, 0b10000000,
+  0b10100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b00100100, 0b10000000,
+  0b01111111, 0b11000000,
+  0b01111111, 0b11000000
+};
+
+// 7: двоголовий роздвоєний (8x16) topOffset=0
+const unsigned char PROGMEM cactus_7[] = {
+  0b01100110,
+  0b01100110,
+  0b01111110,
+  0b01111110,
+  0b01100110,
+  0b01100110,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00111100,
+  0b00111100
+};
+
+// 8: маленький пеньок — дуже низький (8x16) topOffset=10
+const unsigned char PROGMEM cactus_8[] = {
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b01111110,  // тільки пеньок знизу
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111
+};
+
+// 9: висока башта з шипами (8x16) topOffset=0
+const unsigned char PROGMEM cactus_9[] = {
+  0b01000010,  // шипи зверху
+  0b11100111,
+  0b01111110,
+  0b00111100,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00111100,
+  0b00111100,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00111100,
+  0b00111100
+};
+
+// 10: широкий з аркою посередині (16x16) topOffset=0
+// між двома стовбурами є прохід — але хітбокс не дає пройти знизу
+const unsigned char PROGMEM cactus_10[] = {
+  0b11000000, 0b00000011,
+  0b11000000, 0b00000011,
+  0b11100000, 0b00000111,
+  0b11110000, 0b00001111,
+  0b11111000, 0b00011111,
+  0b11111100, 0b00111111,
+  0b11000000, 0b00000011,
+  0b11000000, 0b00000011,
+  0b11000000, 0b00000011,
+  0b11000000, 0b00000011,
+  0b11000000, 0b00000011,
+  0b11000000, 0b00000011,
+  0b11000000, 0b00000011,
+  0b11000000, 0b00000011,
+  0b11111111, 0b11111111,
+  0b11111111, 0b11111111
+};
+
+// 11: кущ колючок — широкий і низький (16x16) topOffset=6
+const unsigned char PROGMEM cactus_11[] = {
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b00000000, 0b00000000,
+  0b01001001, 0b00100100,  // шипи
+  0b11111111, 0b11111110,
+  0b11111111, 0b11111110,
+  0b01111111, 0b11111100,
+  0b00111111, 0b11111000,
+  0b00011111, 0b11110000,
+  0b00001111, 0b11100000,
+  0b00000111, 0b11000000,
+  0b00001111, 0b11100000,
+  0b00011111, 0b11110000
+};
+
+// =============================================
+// ПТАХ (16x8)
+// =============================================
+const unsigned char PROGMEM bird[] = {
+  0b00000011, 0b00000000,
+  0b00001111, 0b00000000,
+  0b00111111, 0b11100000,
+  0b11111111, 0b11111100,
+  0b11111111, 0b11000000,
+  0b00111110, 0b00000000,
+  0b00011100, 0b00000000,
+  0b00001000, 0b00000000
+};
+
+// ПТАХ крила вниз (16x8)
+const unsigned char PROGMEM bird2[] = {
+  0b00001000, 0b00000000,
+  0b00011100, 0b00000000,
+  0b00111110, 0b00000000,
+  0b11111111, 0b11111100,
+  0b11111111, 0b11000000,
+  0b00111111, 0b11100000,
+  0b00001111, 0b00000000,
+  0b00000011, 0b00000000
+};
+
+// =============================================
+// ДЕКОРАЦІЇ ФОНУ
+// =============================================
+
+// Хмара (16x8)
+const unsigned char PROGMEM cloud[] = {
+  0b00011110, 0b00000000,
+  0b00111111, 0b00000000,
+  0b01111111, 0b10000000,
+  0b11111111, 0b11000000,
+  0b11111111, 0b11000000,
+  0b01111111, 0b10000000,
+  0b00111111, 0b00000000,
+  0b00000000, 0b00000000
+};
+
+// Гора вдалині (16x8)
+const unsigned char PROGMEM mountain[] = {
+  0b00000001, 0b00000000,
+  0b00000011, 0b10000000,
+  0b00000111, 0b11000000,
+  0b00001111, 0b11100000,
+  0b00011111, 0b11110000,
+  0b00111111, 0b11111000,
+  0b01111111, 0b11111100,
+  0b11111111, 0b11111110
+};
+
+// =============================================
+// СТРУКТУРА КАКТУСА
+// =============================================
+
+struct CactusType {
+  const unsigned char* bitmap;
+  uint8_t w;
+  uint8_t h;
+  uint8_t hitW;
+  uint8_t topOffset; // реальний контент починається з цього рядка
+};
+
+const CactusType CACTUSES[] = {
+  { cactus_0,   8, 16,  6,  0 },
+  { cactus_1,   8, 16,  5,  0 },
+  { cactus_2,  16, 16, 14,  0 },
+  { cactus_3,   8, 16,  7,  0 },
+  { cactus_4,  16, 16, 13,  8 },  // низький — перестрибується легко
+  { cactus_5,   8, 16,  6,  0 },
+  { cactus_6,  16, 16, 14,  0 },
+  { cactus_7,   8, 16,  7,  0 },
+  { cactus_8,   8, 16,  6, 10 },  // пеньок — перестрибується легко
+  { cactus_9,   8, 16,  6,  0 },
+  { cactus_10, 16, 16, 14,  0 },
+  { cactus_11, 16, 16, 14,  6 },  // кущ — середній стрибок
+};
+const uint8_t CACTUS_COUNT = 12;
+
+// =============================================
+// КОНСТАНТИ
+// =============================================
+const int GROUND_Y = 116;
+const int DINO_X   = 20;
+const int SCREEN_W = 128;
+const int SCREEN_H = 128;
+
+// =============================================
+// СТАН ГРИ
+// =============================================
+enum GameState { STATE_START, STATE_PLAY, STATE_DEAD };
+GameState gameState = STATE_START;
+
+// Динозавр
+int  dinoY      = GROUND_Y - 16;
+int  jumpVel    = 0;
+bool isJumping  = false;
+bool isDucking  = false;
+int  animFrame  = 0;
+int  animTick   = 0;
+int  birdAnim   = 0;
+int  birdAnimTick = 0;
+
+// Попередній кадр
+int  prevDinoY     = GROUND_Y - 16;
+bool prevIsDucking = false;
+
+// Перешкоди
+int obsX    = SCREEN_W + 20;
+int obsType = 0;
+int birdX   = 300;
+int birdY   = GROUND_Y - 28;
+
+int prevObsX    = SCREEN_W + 20;
+int prevObsType = 0;
+int prevBirdX   = 300;
+int prevBirdY   = GROUND_Y - 28;
+
+// Декорації
+int cloud1X = 80,  cloud1Y = 20;
+int cloud2X = 30,  cloud2Y = 35;
+int mount1X = 100, mount1Y = GROUND_Y - 8;
+int mount2X = 40,  mount2Y = GROUND_Y - 6;
+
+int prevCloud1X = 80;
+int prevCloud2X = 30;
+int prevMount1X = 100;
+int prevMount2X = 40;
+
+// Земля і рахунок
+int           groundOffset = 0;
+int           score        = 0;
+int           highScore    = 0;
+unsigned long startTime    = 0;
+int           speed        = 3;
+
+// Кнопки
+bool prevJump = false;
+bool prevDuck = false;
+
+// Меню
+unsigned long menuTick  = 0;
+bool          menuBlink = true;
+
+// =============================================
+// МАЛЮВАННЯ
+// =============================================
+
+void erasePrevDino() {
+  if (prevIsDucking)
+    tft.fillRect(DINO_X - 1, GROUND_Y - 13, 19, 13, COL_BLACK);
+  else
+    tft.fillRect(DINO_X - 1, prevDinoY - 1, 19, 18, COL_BLACK);
+}
+
+void erasePrevObs() {
+  const CactusType& c = CACTUSES[prevObsType];
+  tft.fillRect(prevObsX - 1, GROUND_Y - 17, c.w + 2, 18, COL_BLACK);
+}
+
+void erasePrevBird() {
+  tft.fillRect(prevBirdX - 1, prevBirdY - 1, 19, 11, COL_BLACK);
+}
+
+void eraseDecor() {
+  tft.fillRect(prevCloud1X, cloud1Y, 18, 9, COL_BLACK);
+  tft.fillRect(prevCloud2X, cloud2Y, 18, 9, COL_BLACK);
+  tft.fillRect(prevMount1X, mount1Y, 18, 9, COL_BLACK);
+  tft.fillRect(prevMount2X, mount2Y, 18, 9, COL_BLACK);
+}
+
+void drawDecor() {
+  // Хмари — рухаються повільно
+  tft.drawBitmap(cloud1X, cloud1Y, cloud,    16, 8, AMBER_DIM);
+  tft.drawBitmap(cloud2X, cloud2Y, cloud,    16, 8, AMBER_DIM);
+  // Гори — рухаються дуже повільно
+  tft.drawBitmap(mount1X, mount1Y, mountain, 16, 8, AMBER_DIM);
+  tft.drawBitmap(mount2X, mount2Y, mountain, 16, 8, AMBER_DIM);
+}
+
+void eraseGround() {
+  tft.drawFastHLine(0, GROUND_Y + 1, SCREEN_W, COL_BLACK);
+  tft.drawFastHLine(0, GROUND_Y + 2, SCREEN_W, COL_BLACK);
+}
+
+void drawGround() {
+  tft.drawFastHLine(0, GROUND_Y,     SCREEN_W, AMBER);
+  tft.drawFastHLine(0, GROUND_Y + 1, SCREEN_W, AMBER_DIM);
+  // Камінці
+  int o = groundOffset % 24;
+  for (int x = o - 24; x < SCREEN_W; x += 24)
+    if (x >= 0 && x < SCREEN_W - 2)
+      tft.drawFastHLine(x, GROUND_Y + 2, 3, AMBER_DIM);
+}
+
+void drawDino() {
+  if (isDucking) {
+    tft.drawBitmap(DINO_X, GROUND_Y - 12, dino_duck, 16, 16, AMBER);
+  } else if (isJumping) {
+    tft.drawBitmap(DINO_X, dinoY, dino_jump, 16, 16, AMBER);
+  } else {
+    const unsigned char* frame = (animFrame == 0) ? dino_run1 : dino_run2;
+    tft.drawBitmap(DINO_X, dinoY, frame, 16, 16, AMBER);
+  }
+}
+
+void drawObs() {
+  const CactusType& c = CACTUSES[obsType];
+  tft.drawBitmap(obsX, GROUND_Y - 16, c.bitmap, c.w, c.h, AMBER);
+}
+
+void drawBird() {
+  const unsigned char* bframe = (birdAnim == 0) ? bird : bird2;
+  tft.drawBitmap(birdX, birdY, bframe, 16, 8, AMBER);
+}
+
+// =============================================
+// КОЛІЗІЇ
+// =============================================
+
+bool checkCactusHit() {
+  const CactusType& c = CACTUSES[obsType];
+  int obsTop  = (GROUND_Y - 16) + (int)c.topOffset;
+  int obsBot  = GROUND_Y - 1;
+  int dinoTop = isDucking ? (GROUND_Y - 12) : dinoY + 2;
+  int dinoBot = isDucking ? (GROUND_Y - 2)  : (dinoY + 14);
+  int dinoL   = DINO_X + 3;
+  int dinoR   = DINO_X + 13;
+  int obsL    = obsX + 1;
+  int obsR    = obsX + (int)c.hitW;
+
+  return (dinoR > obsL) && (dinoL < obsR) &&
+         (dinoBot > obsTop) && (dinoTop < obsBot);
+}
+
+bool checkBirdHit() {
+  int dinoTop = isDucking ? (GROUND_Y - 12) : dinoY + 2;
+  int dinoBot = isDucking ? (GROUND_Y - 2)  : (dinoY + 14);
+  return (DINO_X + 13 > birdX + 2) &&
+         (DINO_X + 3  < birdX + 13) &&
+         (dinoBot > birdY + 1) &&
+         (dinoTop < birdY + 7);
+}
+
+// =============================================
+// МЕНЮ
+// =============================================
+
+void showStartScreen() {
+  tft.fillScreen(COL_BLACK);
+
+  // Подвійна рамка
+  tft.drawRect(3, 3, 122, 122, AMBER_DIM);
+  tft.drawRect(5, 5, 118, 118, AMBER_DIM);
+  // Кутові акценти
+  tft.fillRect(3,  3,  7, 7, AMBER);
+  tft.fillRect(118,3,  7, 7, AMBER);
+  tft.fillRect(3,  118,7, 7, AMBER);
+  tft.fillRect(118,118,7, 7, AMBER);
+  // Чорні крапки в кутах для деталі
+  tft.fillRect(5,  5,  3, 3, COL_BLACK);
+  tft.fillRect(120,5,  3, 3, COL_BLACK);
+  tft.fillRect(5,  120,3, 3, COL_BLACK);
+  tft.fillRect(120,120,3, 3, COL_BLACK);
+
+  // Заголовок
+  tft.setTextSize(1);
+  tft.setTextColor(AMBER_BRIGHT, COL_BLACK);
+  tft.setCursor(22, 13);
+  tft.print("[ DINO RUNNER ]");
+
+  tft.drawFastHLine(8, 23, 112, AMBER_DIM);
+
+  // Дино у рамці зі зірочками
+  tft.drawRect(50, 27, 28, 26, AMBER_DIM);
+  tft.drawBitmap(52, 29, dino_run1, 16, 16, AMBER);
+  // Зірочки по боках
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(40, 35);  tft.print("*");
+  tft.setCursor(80, 35);  tft.print("*");
+
+  tft.drawFastHLine(8, 57, 112, AMBER_DIM);
+
+  // Керування з іконками
+  tft.setTextColor(AMBER, COL_BLACK);
+  tft.setCursor(10, 63);
+  tft.print("A");
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(20, 63);
+  tft.print("JUMP / START");
+
+  tft.setTextColor(AMBER, COL_BLACK);
+  tft.setCursor(10, 73);
+  tft.print("B");
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(20, 73);
+  tft.print("DUCK");
+
+  tft.drawFastHLine(8, 84, 112, AMBER_DIM);
+
+  // Рекорд
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(10, 90);
+  tft.print("BEST SCORE:");
+  tft.setTextColor(AMBER_BRIGHT, COL_BLACK);
+  tft.setCursor(88, 90);
+  tft.print(highScore);
+
+  // Кількість кактусів
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(10, 100);
+  tft.print("OBSTACLES: 12 types");
+
+  tft.drawFastHLine(8, 110, 112, AMBER_DIM);
+
+  // Блимаючий рядок
+  tft.setTextColor(AMBER_BRIGHT, COL_BLACK);
+  tft.setCursor(18, 116);
+  tft.print("PRESS A TO START");
+
+  // Дино і земля внизу
+  tft.drawFastHLine(0, GROUND_Y, SCREEN_W, AMBER);
+  tft.drawBitmap(6, GROUND_Y - 16, dino_run1, 16, 16, AMBER);
+  // Маленький кактус для декору
+  tft.drawBitmap(100, GROUND_Y - 16, cactus_0, 8, 16, AMBER_DIM);
+}
+
+void updateMenuBlink() {
+  if (millis() - menuTick > 480) {
+    menuTick  = millis();
+    menuBlink = !menuBlink;
+    tft.setTextColor(menuBlink ? AMBER_BRIGHT : COL_BLACK, COL_BLACK);
+    tft.setCursor(18, 116);
+    tft.print("PRESS A TO START");
+  }
+}
+
+// =============================================
+// ЕКРАН СМЕРТІ
+// =============================================
+
+void showGameOver() {
+  if (score > highScore) highScore = score;
+
+  tft.fillScreen(COL_BLACK);
+
+  // Подвійна рамка
+  tft.drawRect(3, 3, 122, 122, AMBER_DIM);
+  tft.drawRect(5, 5, 118, 118, AMBER_DIM);
+  // Кутові акценти червоні
+  tft.fillRect(3,  3,   7, 7, COL_RED);
+  tft.fillRect(118,3,   7, 7, COL_RED);
+  tft.fillRect(3,  118, 7, 7, COL_RED);
+  tft.fillRect(118,118, 7, 7, COL_RED);
+  tft.fillRect(5,  5,   3, 3, COL_BLACK);
+  tft.fillRect(120,5,   3, 3, COL_BLACK);
+  tft.fillRect(5,  120, 3, 3, COL_BLACK);
+  tft.fillRect(120,120, 3, 3, COL_BLACK);
+
+  // Заголовок
+  tft.setTextColor(COL_RED, COL_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(30, 13);
+  tft.print("[ FAILED ]");
+
+  tft.drawFastHLine(8, 23, 112, AMBER_DIM);
+
+  // Мертвий дино
+  tft.drawBitmap(54, 27, dino_run1, 16, 16, AMBER_DIM);
+  // X на оці
+  tft.drawLine(59, 30, 63, 34, COL_RED);
+  tft.drawLine(63, 30, 59, 34, COL_RED);
+  // Зірочки навколо
+  tft.setTextColor(COL_RED, COL_BLACK);
+  tft.setCursor(42, 30); tft.print("*");
+  tft.setCursor(74, 30); tft.print("*");
+  tft.setCursor(42, 40); tft.print("*");
+  tft.setCursor(74, 40); tft.print("*");
+
+  tft.drawFastHLine(8, 49, 112, AMBER_DIM);
+
+  // Статистика
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(10, 55);
+  tft.print("USER :");
+  tft.setTextColor(AMBER, COL_BLACK);
+  tft.setCursor(55, 55);
+  tft.print("Denys Shaplai");
+
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(10, 66);
+  tft.print("TIME :");
+  tft.setTextColor(AMBER, COL_BLACK);
+  tft.setCursor(55, 66);
+  unsigned long t = (millis() - startTime) / 1000;
+  tft.print(t / 60);
+  tft.print("m ");
+  tft.print(t % 60);
+  tft.print("s");
+
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(10, 77);
+  tft.print("SCORE:");
+  tft.setTextColor(AMBER, COL_BLACK);
+  tft.setCursor(55, 77);
+  tft.print(score);
+
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(10, 88);
+  tft.print("SPEED:");
+  tft.setTextColor(AMBER, COL_BLACK);
+  tft.setCursor(55, 88);
+  tft.print(speed);
+  tft.print(" / 9");
+
+  tft.drawFastHLine(8, 99, 112, AMBER_DIM);
+
+  // Рекорд
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(10, 105);
+  tft.print("BEST :");
+  tft.setTextColor(AMBER_BRIGHT, COL_BLACK);
+  tft.setCursor(55, 105);
+  tft.print(highScore);
+  if (score >= highScore && score > 0) {
+    tft.setTextColor(COL_RED, COL_BLACK);
+    tft.setCursor(85, 105);
+    tft.print("NEW!");
+  }
+
+  tft.drawFastHLine(8, 116, 112, AMBER_DIM);
+  tft.setTextColor(AMBER_DIM, COL_BLACK);
+  tft.setCursor(20, 120);
+  tft.print("A - try again");
+}
+
+// =============================================
+// RESET
+// =============================================
+
+void resetGame() {
+  score         = 0;
+  speed         = 3;
+  dinoY         = GROUND_Y - 16;
+  prevDinoY     = GROUND_Y - 16;
+  jumpVel       = 0;
+  isJumping     = false;
+  isDucking     = false;
+  prevIsDucking = false;
+  animFrame     = 0;
+  animTick      = 0;
+  birdAnim      = 0;
+  birdAnimTick  = 0;
+  obsX          = SCREEN_W + 30;
+  prevObsX      = SCREEN_W + 30;
+  obsType       = random(0, CACTUS_COUNT);
+  prevObsType   = obsType;
+  birdX         = 320;
+  prevBirdX     = 320;
+  birdY         = GROUND_Y - 30;
+  prevBirdY     = birdY;
+  cloud1X       = 80;  prevCloud1X = 80;
+  cloud2X       = 30;  prevCloud2X = 30;
+  mount1X       = 100; prevMount1X = 100;
+  mount2X       = 40;  prevMount2X = 40;
+  groundOffset  = 0;
+  startTime     = millis();
+  tft.fillScreen(COL_BLACK);
+}
+
+// =============================================
+// SETUP / LOOP
+// =============================================
+
+void setup() {
+  pinMode(TFT_BACKLIGHT, OUTPUT);
+  digitalWrite(TFT_BACKLIGHT, HIGH);
+  tft.initR(INITR_144GREENTAB);
+  tft.setRotation(0);
+  tft.fillScreen(COL_BLACK);
+  pinMode(BTN_JUMP, INPUT_PULLUP);
+  pinMode(BTN_DUCK, INPUT_PULLUP);
+  randomSeed(analogRead(0));
+  showStartScreen();
+}
+
+void loop() {
+  bool jumpNow  = (digitalRead(BTN_JUMP) == LOW);
+  bool duckNow  = (digitalRead(BTN_DUCK) == LOW);
+  bool jumpEdge = jumpNow && !prevJump;
+  prevJump = jumpNow;
+  prevDuck = duckNow;
+
+  // ---------- СТАРТ ----------
+  if (gameState == STATE_START) {
+    updateMenuBlink();
+    if (jumpEdge) { resetGame(); gameState = STATE_PLAY; }
+    delay(16);
+    return;
+  }
+
+  // ---------- СМЕРТЬ ----------
+  if (gameState == STATE_DEAD) {
+    if (jumpEdge) { showStartScreen(); gameState = STATE_START; }
+    delay(16);
+    return;
+  }
+
+  // ========== ГРА ==========
+
+  speed = 3 + (score / 8);
+  if (speed > 9) speed = 9;
+
+  // Зберігаємо попередній стан
+  prevDinoY     = dinoY;
+  prevIsDucking = isDucking;
+  prevObsX      = obsX;
+  prevObsType   = obsType;
+  prevBirdX     = birdX;
+  prevBirdY     = birdY;
+  prevCloud1X   = cloud1X;
+  prevCloud2X   = cloud2X;
+  prevMount1X   = mount1X;
+  prevMount2X   = mount2X;
+
+  // Очищення
+  erasePrevDino();
+  erasePrevObs();
+  erasePrevBird();
+  eraseDecor();
+  eraseGround();
+
+  // --- Присідання ---
+  isDucking = (duckNow && !isJumping);
+  if (!isDucking && !isJumping) dinoY = GROUND_Y - 16;
+
+  // --- Стрибок ---
+  if (jumpEdge && !isJumping && !isDucking) {
+    jumpVel  = 8;
+    isJumping = true;
+  }
+  if (isJumping) {
+    dinoY -= jumpVel;
+    jumpVel--;
+    if (dinoY >= GROUND_Y - 16) {
+      dinoY     = GROUND_Y - 16;
+      isJumping = false;
+    }
+  }
+
+  // --- Анімація дино ---
+  if (!isJumping && !isDucking)
+    if (++animTick >= 5) { animTick = 0; animFrame = 1 - animFrame; }
+
+  // --- Анімація птаха ---
+  if (++birdAnimTick >= 8) { birdAnimTick = 0; birdAnim = 1 - birdAnim; }
+
+  // --- Рух кактуса ---
+  obsX -= speed;
+  if (obsX < -18) {
+    obsX    = SCREEN_W + random(20, 55);
+    obsType = random(0, CACTUS_COUNT);
+    score++;
+  }
+
+  // --- Рух птаха ---
+  birdX -= speed + 2;
+  if (birdX < -18) {
+    birdX = SCREEN_W + random(40, 100);
+    birdY = GROUND_Y - random(22, 48);
+    score++;
+  }
+
+  // --- Декорації ---
+  // Хмари — вдвічі повільніші за кактуси
+  cloud1X -= max(1, speed / 2);
+  cloud2X -= max(1, speed / 2);
+  if (cloud1X < -18) cloud1X = SCREEN_W + random(10, 40);
+  if (cloud2X < -18) cloud2X = SCREEN_W + random(10, 40);
+
+  // Гори — дуже повільні (паралакс)
+  mount1X -= max(1, speed / 3);
+  mount2X -= max(1, speed / 3);
+  if (mount1X < -18) mount1X = SCREEN_W + random(10, 30);
+  if (mount2X < -18) mount2X = SCREEN_W + random(10, 30);
+
+  groundOffset += speed;
+
+  // --- Малювання ---
+  drawDecor();
+  drawGround();
+  drawObs();
+  drawBird();
+  drawDino();
+
+  // --- Колізії ---
+  if (checkCactusHit() || checkBirdHit()) {
+    gameState = STATE_DEAD;
+    showGameOver();
+    return;
+  }
+
+  // --- UI ---
+  tft.setTextSize(1);
+  tft.setTextColor(AMBER, COL_BLACK);
+  tft.setCursor(2, 2);
+  tft.print("XP:");
+  tft.print(score);
+  tft.setCursor(66, 2);
+  tft.print("HI:");
+  tft.print(highScore);
+
+  delay(28);
+}
