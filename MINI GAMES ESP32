@@ -2,16 +2,29 @@
 // MINI GAMES ESP32 — ST7789 240x320
 // Ігри: BREAKOUT + DINO RUNNER + ЗМІЙКА + ТЕТРІС
 //
-// КНОПКИ:
-//   PIN 22 = LEFT   (вліво)
-//   PIN 21 = DOWN   (вниз / присідання)
-//   PIN 13 = RIGHT  (вправо)
-//   PIN 14 = UP     (вгору / стрибок)
-//   PIN 26 = ROT    (обертання/дія/пуск)
-//   PIN 25 = MENU   (меню)
+// ─── КНОПКИ (всі на INPUT_PULLUP, LOW = натиснуто) ──────────
+//   PIN 22 = BTN_LEFT   ← вліво
+//   PIN 21 = BTN_DOWN   ↓ вниз / присідання
+//   PIN 13 = BTN_RIGHT  → вправо
+//   PIN 14 = BTN_UP     ↑ вгору / стрибок / hard-drop
+//   PIN 26 = BTN_ROT    обертання / дія / пуск
+//   PIN 25 = BTN_MENU   вихід у меню
 //
-// Дисплей: CS=5 DC=2 RST=4 BL=32 MOSI=23 CLK=18
-// Зумер:   BUZZ=33
+// ─── ДИСПЛЕЙ ST7789 240×320 ──────────────────────────────────
+//   CS   = GPIO 5   (TFT_CS)
+//   DC   = GPIO 2   (TFT_DC)
+//   RST  = GPIO 4   (TFT_RST)
+//   BL   = GPIO 32  (підсвітка, HIGH = увімкнено)
+//   MOSI = GPIO 23  (SPI Data)
+//   CLK  = GPIO 18  (SPI Clock)
+//
+// ─── ЗУМЕР MH-FMG (пасивний п'єзо-модуль) ───────────────────
+//   S (Signal) = GPIO 33  (BUZZ) — керування через tone()
+//   + (VCC)    = 3.3 V або 5 V
+//   - (GND)    = GND
+//   Примітка: модуль MH-FMG — пасивний зумер, потребує
+//   PWM-сигналу. Функція tone(BUZZ, freq, ms) генерує потрібну
+//   частоту напряму. noTone(BUZZ) зупиняє звук.
 // ============================================================
 
 #include <Adafruit_GFX.h>
@@ -25,217 +38,6 @@
 struct SnakePt {
   int8_t x, y;
 };
-
-struct CactusType {
-  const unsigned char* bitmap;
-  uint8_t w;
-  uint8_t h;
-  uint8_t hitW;
-  uint8_t topOffset;
-};
-
-// ─────────────────────────────────────────────
-// БІТМАПИ ДИНО (16×16, PROGMEM, масштаб ×2)
-// ─────────────────────────────────────────────
-const unsigned char PROGMEM dino_run1[] = {
-  0b00000001,0b11000000,
-  0b00000011,0b11100000,
-  0b00000111,0b11110000,
-  0b00000110,0b01110000,
-  0b00001111,0b11110000,
-  0b00001111,0b11100000,
-  0b00011111,0b10000000,
-  0b01111111,0b11000000,
-  0b11111111,0b11000000,
-  0b11111111,0b11000000,
-  0b01111111,0b10000000,
-  0b00111111,0b10000000,
-  0b00011111,0b00000000,
-  0b00011000,0b00000000,
-  0b00111000,0b00000000,
-  0b00010000,0b00000000
-};
-const unsigned char PROGMEM dino_run2[] = {
-  0b00000001,0b11000000,
-  0b00000011,0b11100000,
-  0b00000111,0b11110000,
-  0b00000110,0b01110000,
-  0b00001111,0b11110000,
-  0b00001111,0b11100000,
-  0b00011111,0b10000000,
-  0b01111111,0b11000000,
-  0b11111111,0b11000000,
-  0b11111111,0b11000000,
-  0b01111111,0b10000000,
-  0b00111111,0b10000000,
-  0b00011111,0b00000000,
-  0b00010110,0b00000000,
-  0b00010110,0b00000000,
-  0b00000100,0b00000000
-};
-const unsigned char PROGMEM dino_jump[] = {
-  0b00000001,0b11000000,
-  0b00000011,0b11100000,
-  0b00000111,0b11110000,
-  0b00000110,0b01110000,
-  0b00001111,0b11110000,
-  0b00001111,0b11100000,
-  0b00011111,0b10000000,
-  0b01111111,0b11000000,
-  0b11111111,0b11000000,
-  0b11111111,0b11000000,
-  0b01111111,0b10000000,
-  0b00111111,0b10000000,
-  0b00011110,0b00000000,
-  0b00001100,0b00000000,
-  0b00000000,0b00000000,
-  0b00000000,0b00000000
-};
-const unsigned char PROGMEM dino_duck[] = {
-  0b00000000,0b00000000,
-  0b00000000,0b00000000,
-  0b00000001,0b11000000,
-  0b00000011,0b11110000,
-  0b00000010,0b11110000,
-  0b00011111,0b11110000,
-  0b01111111,0b11110000,
-  0b11111111,0b11100000,
-  0b11111111,0b11100000,
-  0b11111111,0b11000000,
-  0b01111111,0b10000000,
-  0b00111100,0b00000000,
-  0b00011000,0b00000000,
-  0b00101000,0b00000000,
-  0b00000000,0b00000000,
-  0b00000000,0b00000000
-};
-
-// Птах (16×8, 2 кадри)
-const unsigned char PROGMEM bird1[] = {
-  0b00000011,0b00000000,
-  0b00001111,0b00000000,
-  0b00111111,0b11100000,
-  0b11111111,0b11111100,
-  0b11111111,0b11000000,
-  0b00111110,0b00000000,
-  0b00011100,0b00000000,
-  0b00001000,0b00000000
-};
-const unsigned char PROGMEM bird2[] = {
-  0b00001000,0b00000000,
-  0b00011100,0b00000000,
-  0b00111110,0b00000000,
-  0b11111111,0b11111100,
-  0b11111111,0b11000000,
-  0b00111111,0b11100000,
-  0b00001111,0b00000000,
-  0b00000011,0b00000000
-};
-
-// Хмара (16×8)
-const unsigned char PROGMEM bmp_cloud[] = {
-  0b00011110,0b00000000,
-  0b00111111,0b00000000,
-  0b01111111,0b10000000,
-  0b11111111,0b11000000,
-  0b11111111,0b11000000,
-  0b01111111,0b10000000,
-  0b00111111,0b00000000,
-  0b00000000,0b00000000
-};
-
-// ─────────────────────────────────────────────
-// БІТМАПИ КАКТУСІВ (PROGMEM)
-// ─────────────────────────────────────────────
-const unsigned char PROGMEM cactus_0[] = {
-  0b00011000,0b00011000,0b01111000,0b01111000,
-  0b11111100,0b00011000,0b00011100,0b00011000,
-  0b00011000,0b00011000,0b00011000,0b00011000,
-  0b00011000,0b00011000,0b00111100,0b00111100
-};
-const unsigned char PROGMEM cactus_1[] = {
-  0b00001100,0b00001100,0b00001100,0b11101100,
-  0b11111100,0b00001100,0b00001100,0b00001111,
-  0b00001111,0b00001100,0b00001100,0b00001100,
-  0b00001100,0b00001100,0b00011110,0b00011110
-};
-const unsigned char PROGMEM cactus_2[] = {
-  0b00011000,0b00110000,0b00011000,0b00110000,
-  0b01111000,0b00110000,0b01111100,0b11110000,
-  0b11111111,0b11110000,0b00011111,0b11110000,
-  0b00011000,0b11110000,0b00011000,0b00110000,
-  0b00011000,0b00110000,0b00011000,0b00110000,
-  0b00011000,0b00110000,0b00011000,0b00110000,
-  0b00011000,0b00110000,0b00011000,0b00110000,
-  0b00111100,0b01111000,0b00111100,0b01111000
-};
-const unsigned char PROGMEM cactus_3[] = {
-  0b00111100,0b00111100,0b11111110,0b11111110,
-  0b11111110,0b00111100,0b00111100,0b11111110,
-  0b11111110,0b00111100,0b00111100,0b00111100,
-  0b00111100,0b00111100,0b01111110,0b01111110
-};
-const unsigned char PROGMEM cactus_4[] = {
-  0b00000000,0b00000000,0b00000000,0b00000000,
-  0b00000000,0b00000000,0b00000000,0b00000000,
-  0b00000000,0b00000000,0b00000000,0b00000000,
-  0b00000000,0b00000000,0b00000000,0b00000000,
-  0b01111011,0b11011000,0b11111111,0b11111100,
-  0b11111111,0b11111100,0b01111011,0b11011000,
-  0b00011000,0b00110000,0b00011000,0b00110000,
-  0b00111100,0b01111000,0b00111100,0b01111000
-};
-const unsigned char PROGMEM cactus_5[] = {
-  0b00001100,0b00011100,0b00011000,0b01111000,
-  0b01110000,0b00011000,0b00011100,0b00001100,
-  0b00011100,0b00011000,0b00011000,0b00011000,
-  0b00011000,0b00011000,0b00111100,0b00111100
-};
-const unsigned char PROGMEM cactus_6[] = {
-  0b00100100,0b10000000,0b00100100,0b10000000,
-  0b10100100,0b10000000,0b11111111,0b10000000,
-  0b10100100,0b10000000,0b00100100,0b10000000,
-  0b00100100,0b10000000,0b00100100,0b10000000,
-  0b00100100,0b10000000,0b00100100,0b10000000,
-  0b00100100,0b10000000,0b00100100,0b10000000,
-  0b00100100,0b10000000,0b00100100,0b10000000,
-  0b01111111,0b11000000,0b01111111,0b11000000
-};
-const unsigned char PROGMEM cactus_7[] = {
-  0b01100110,0b01100110,0b01111110,0b01111110,
-  0b01100110,0b01100110,0b00011000,0b00011000,
-  0b00011000,0b00011000,0b00011000,0b00011000,
-  0b00011000,0b00011000,0b00111100,0b00111100
-};
-const unsigned char PROGMEM cactus_8[] = {
-  0b00000000,0b00000000,0b00000000,0b00000000,
-  0b00000000,0b00000000,0b00000000,0b00000000,
-  0b00000000,0b00000000,0b01111110,0b11111111,
-  0b11111111,0b11111111,0b11111111,0b11111111
-};
-const unsigned char PROGMEM cactus_9[] = {
-  0b01000010,0b11100111,0b01111110,0b00111100,
-  0b00011000,0b00011000,0b00011000,0b00111100,
-  0b00111100,0b00011000,0b00011000,0b00011000,
-  0b00011000,0b00011000,0b00111100,0b00111100
-};
-
-// ─────────────────────────────────────────────
-// ТАБЛИЦЯ КАКТУСІВ
-// ─────────────────────────────────────────────
-const CactusType CACTUSES[] = {
-  { cactus_0,  8, 16,  6,  0 },
-  { cactus_1,  8, 16,  5,  0 },
-  { cactus_2, 16, 16, 14,  0 },
-  { cactus_3,  8, 16,  7,  0 },
-  { cactus_4, 16, 16, 13,  8 },
-  { cactus_5,  8, 16,  6,  0 },
-  { cactus_6, 16, 16, 14,  0 },
-  { cactus_7,  8, 16,  7,  0 },
-  { cactus_8,  8, 16,  6, 10 },
-  { cactus_9,  8, 16,  6,  0 },
-};
-const uint8_t CACTUS_COUNT = 10;
 
 // ─────────────────────────────────────────────
 // ПІНИ
@@ -351,7 +153,7 @@ void drawMenu(){
   tft.setTextSize(2); tft.setTextColor(C_YELLOW);
   tft.setCursor(20,18); tft.print("ESP32 GAMES");
   tft.setTextSize(1);
-  const char* names[4]={"BREAKOUT","DINO RUNNER","SNAKE","TETRIS"};
+  const char* names[4]={"BREAKOUT","SPACE INVADERS","SNAKE","TETRIS"};
   uint16_t    cols[4] ={RGB(0,220,255),C_GREEN,RGB(0,200,255),RGB(180,0,220)};
   for(int i=0;i<4;i++){
     if(menuSel==i){
@@ -524,132 +326,274 @@ void breakoutCycle(){
 }
 
 // ══════════════════════════════════════════════
-//  DINO RUNNER
-//  UP=стрибок  DOWN=присідання  MENU=меню
+//  SPACE INVADERS
+//  LEFT/RIGHT = рух корабля   ROT = вогонь
+//  MENU = меню
 // ══════════════════════════════════════════════
-#define DGY      270
-#define D_SCALE    2
-#define D_SPW     16
-#define D_SPH     16
-#define D_RSW    (D_SPW*D_SCALE)
-#define D_RSH    (D_SPH*D_SCALE)
-#define DINO_X    30
+#define SPC_COLS   8
+#define SPC_ROWS   3
+#define SPC_INV_W  14
+#define SPC_INV_H  10
+#define SPC_GAP_X  26
+#define SPC_GAP_Y  22
+#define SPC_GX0    13
+#define SPC_GY0    48
+#define SPC_SHIP_Y 298
+#define SPC_SHIP_W 22
+#define SPC_SHIP_H 10
+#define SPC_LIVES  3
+#define SPC_BSPD   7
+#define SPC_IBSPD  3
+#define SPC_IBMAX  3
 
-bool  d_dead; int d_dinoY,d_vy; bool d_onGnd,d_ducking;
-int   d_frame,d_legF,d_score,d_best,d_spd;
-int   d_obsX,d_obsType,d_birdX,d_birdY,d_birdF,d_birdFT;
-int   d_cldX[2],d_cldY[2];
-bool  d_pUp,d_pDown;
+#define SC_BG    C_BLACK
+#define SC_INV0  RGB(255,0,200)
+#define SC_INV1  RGB(0,220,255)
+#define SC_INV2  RGB(0,220,60)
+#define SC_SHIP  RGB(0,220,255)
+#define SC_BULL  RGB(255,255,0)
+#define SC_IBULL RGB(255,80,0)
+#define SC_GNDL  RGB(0,70,0)
 
-void d_drawBg(){
-  tft.fillScreen(C_DBG);
-  tft.fillCircle(200,25,14,C_MOON); tft.fillCircle(207,21,11,C_DBG);
-  for(int i=0;i<8;i++) tft.drawPixel((i*31+15)%SW,(i*17+5)%55,RGB(120,150,100));
-  tft.fillRect(0,DGY,SW,5,C_DGND); tft.fillRect(0,DGY+5,SW,SH-DGY-5,C_DGND2);
+bool spc_grid[SPC_ROWS][SPC_COLS];
+int  spc_gx,spc_gy,spc_dir;
+int  spc_ship,spc_score,spc_best,spc_lives,spc_alive,spc_anim;
+bool spc_dead,spc_win;
+bool spc_bActive; int spc_bx,spc_by;
+bool spc_ibActive[SPC_IBMAX]; int spc_ibx[SPC_IBMAX],spc_iby[SPC_IBMAX];
+unsigned long spc_nextMove,spc_nextShoot; int spc_moveDelay;
+bool spc_pLeft,spc_pRight,spc_pRot,spc_pMenu;
+
+uint16_t spc_invColor(int row){
+  if(row==0)return SC_INV0; if(row==1)return SC_INV1; return SC_INV2;
 }
 
-void d_drawDino(bool erase){
-  uint16_t fg=erase?C_DBG:C_DINO,bg=C_DBG;
-  const uint8_t* bmp;
-  if(erase)        bmp=dino_run1;
-  else if(d_ducking) bmp=dino_duck;
-  else if(!d_onGnd)  bmp=dino_jump;
-  else               bmp=(d_legF==0)?dino_run1:dino_run2;
-  drawScaledBmp(DINO_X,d_dinoY,bmp,D_SPW,D_SPH,fg,bg,D_SCALE);
+void spc_drawInv(int px,int py,int row,bool erase){
+  if(erase){tft.fillRect(px,py,SPC_INV_W,SPC_INV_H,SC_BG);return;}
+  uint16_t c=spc_invColor(row);
+  if(row==0){
+    tft.fillRect(px+4,py,  6,2,c);
+    tft.fillRect(px,  py+2,14,2,c);
+    tft.fillRect(px+2,py+4,10,2,c);
+    tft.fillRect(px+2,py+6,4, 2,c);
+    tft.fillRect(px+8,py+6,4, 2,c);
+    if(spc_anim==0){tft.fillRect(px,   py+8,4,2,c);tft.fillRect(px+10,py+8,4,2,c);}
+    else           {tft.fillRect(px+4, py+8,2,2,c);tft.fillRect(px+8, py+8,2,2,c);}
+  } else if(row==1){
+    tft.fillRect(px+2,py,  10,2,c);
+    tft.fillRect(px,  py+2,14,4,c);
+    tft.fillRect(px,  py+6,4, 2,c);
+    tft.fillRect(px+10,py+6,4,2,c);
+    if(spc_anim==0){tft.fillRect(px,   py+8,2,2,c);tft.fillRect(px+12,py+8,2,2,c);}
+    else           {tft.fillRect(px+2, py+8,2,2,c);tft.fillRect(px+10,py+8,2,2,c);}
+  } else {
+    tft.fillRect(px,  py,  14,2,c);
+    tft.fillRect(px,  py+2,14,4,c);
+    tft.fillRect(px,  py+6,4, 2,c);
+    tft.fillRect(px+10,py+6,4,2,c);
+    if(spc_anim==0){tft.fillRect(px+2, py+8,4,2,c);tft.fillRect(px+8, py+8,4,2,c);}
+    else           {tft.fillRect(px,   py+8,4,2,c);tft.fillRect(px+10,py+8,4,2,c);}
+  }
 }
 
-void d_drawCactus(int ox,int ot,bool erase){
-  const CactusType& ct=CACTUSES[ot];
-  int y=DGY-ct.h*D_SCALE;
-  uint16_t fg=erase?C_DBG:RGB(0,130,0),bg=C_DBG;
-  drawScaledBmp(ox,y,ct.bitmap,ct.w,ct.h,fg,bg,D_SCALE);
+void spc_drawShip(int cx,uint16_t c){
+  int x=cx-SPC_SHIP_W/2,y=SPC_SHIP_Y;
+  tft.fillRect(x, y,  SPC_SHIP_W,SPC_SHIP_H,c);
+  tft.fillRect(x+8,y-4,6,4,c);
+  tft.fillRect(x+10,y-8,2,4,c);
 }
 
-void d_drawBird(int bx,int by,bool erase){
-  const uint8_t* bmp=(d_birdF==0)?bird1:bird2;
-  uint16_t fg=erase?C_DBG:RGB(0,190,60),bg=C_DBG;
-  drawScaledBmp(bx,by,bmp,16,8,fg,bg,D_SCALE);
+void spc_invPos(int r,int c2,int &px,int &py){
+  px=SPC_GX0+spc_gx+c2*SPC_GAP_X;
+  py=SPC_GY0+spc_gy+r*SPC_GAP_Y;
 }
 
-void d_drawCld(int cx,int cy,bool erase){
-  uint16_t fg=erase?C_DBG:RGB(30,80,30),bg=C_DBG;
-  drawScaledBmp(cx,cy,bmp_cloud,16,8,fg,bg,D_SCALE);
+void spc_drawUI(){
+  tft.fillRect(0,0,SW,22,C_BLACK);
+  tft.setTextSize(1);tft.setTextColor(C_WHITE,C_BLACK);
+  tft.setCursor(2,7); tft.print("SC:"); tft.print(spc_score); tft.print("  ");
+  tft.setCursor(90,7);tft.print("HI:"); tft.print(spc_best);  tft.print("  ");
+  for(int i=0;i<SPC_LIVES;i++)
+    tft.fillRect(190+i*15,7,10,8,i<spc_lives?SC_SHIP:RGB(40,40,40));
 }
 
-void d_drawUI(){
-  tft.setTextSize(1);tft.setTextColor(C_GREEN,C_DBG);
-  tft.setCursor(2,2);   tft.print("SC:"); tft.print(d_score); tft.print("   ");
-  tft.setCursor(100,2); tft.print("HI:"); tft.print(d_best);  tft.print("   ");
-  tft.setCursor(190,2); tft.print("SP:"); tft.print(d_spd);   tft.print(" ");
+void spc_drawDead(){
+  tft.fillScreen(C_BLACK);
+  tft.drawRect(2,2,SW-4,SH-4,C_RED);tft.drawRect(5,5,SW-10,SH-10,C_YELLOW);
+  tft.setTextSize(3);tft.setTextColor(C_RED);tft.setCursor(15,30);tft.print("GAME OVER");
+  tft.setTextSize(2);tft.setTextColor(C_YELLOW);
+  tft.setCursor(20,125);tft.print("SCORE:");tft.print(spc_score);
+  tft.setCursor(20,150);tft.print("BEST: ");tft.print(spc_best);
+  if(spc_score>0&&spc_score>=spc_best){tft.setTextColor(C_CYAN);tft.setCursor(20,180);tft.print("<<< RECORD! >>>");}
+  tft.setTextSize(1);tft.setTextColor(C_WHITE);tft.setCursor(10,265);tft.print("ROT=RESTART  MENU=MENU");
 }
 
-void d_drawDead(){
-  tft.fillScreen(C_BLACK); tft.drawRect(2,2,SW-4,SH-4,C_RED); tft.drawRect(5,5,SW-10,SH-10,C_YELLOW);
-  tft.setTextSize(3); tft.setTextColor(C_RED); tft.setCursor(20,30); tft.print("GAME OVER");
-  drawScaledBmp(100,70,dino_duck,D_SPW,D_SPH,RGB(80,80,80),C_BLACK,D_SCALE);
-  tft.setTextSize(2); tft.setTextColor(C_YELLOW);
-  tft.setCursor(20,155); tft.print("SCORE:"); tft.print(d_score);
-  tft.setCursor(20,178); tft.print("BEST: "); tft.print(d_best);
-  if(d_score>0&&d_score>=d_best){tft.setTextColor(C_CYAN);tft.setCursor(20,204);tft.print("<<< RECORD! >>>");}
-  tft.setTextSize(1);tft.setTextColor(C_WHITE);tft.setCursor(20,265);tft.print("UP=RESTART   MENU=MENU");
+void spc_drawWin(){
+  tft.fillScreen(C_BLACK);
+  tft.drawRect(2,2,SW-4,SH-4,C_GREEN);tft.drawRect(5,5,SW-10,SH-10,C_YELLOW);
+  tft.setTextSize(3);tft.setTextColor(C_GREEN);tft.setCursor(30,30);tft.print("YOU WIN!");
+  tft.setTextSize(2);tft.setTextColor(C_YELLOW);
+  tft.setCursor(20,125);tft.print("SCORE:");tft.print(spc_score);
+  tft.setCursor(20,150);tft.print("BEST: ");tft.print(spc_best);
+  tft.setTextSize(1);tft.setTextColor(C_WHITE);tft.setCursor(10,265);tft.print("ROT=RESTART  MENU=MENU");
+}
+
+void spc_calcDelay(){
+  spc_moveDelay=constrain(map(spc_alive,0,SPC_COLS*SPC_ROWS,55,480),55,480);
 }
 
 void dinoInit(){
-  d_dead=false;d_ducking=false;d_dinoY=DGY-D_RSH;d_vy=0;d_onGnd=true;
-  d_frame=0;d_legF=0;d_score=0;d_spd=4;
-  d_obsX=SW+100;d_obsType=random(CACTUS_COUNT);
-  d_birdX=SW+200;d_birdY=DGY-D_RSH-random(30,80);d_birdF=0;d_birdFT=0;
-  for(int i=0;i<2;i++){d_cldX[i]=random(SW);d_cldY[i]=20+i*25;}
-  d_pUp=false;d_pDown=false;
-  d_drawBg();d_drawDino(false);d_drawUI();
+  spc_dead=false;spc_win=false;
+  spc_gx=0;spc_gy=0;spc_dir=1;
+  spc_ship=SW/2;spc_score=0;spc_lives=SPC_LIVES;
+  spc_bActive=false;spc_alive=SPC_COLS*SPC_ROWS;spc_anim=0;
+  for(int i=0;i<SPC_IBMAX;i++)spc_ibActive[i]=false;
+  for(int r=0;r<SPC_ROWS;r++)for(int c=0;c<SPC_COLS;c++)spc_grid[r][c]=true;
+  spc_pLeft=spc_pRight=spc_pRot=spc_pMenu=false;
+  spc_calcDelay();
+  spc_nextMove=millis()+spc_moveDelay;
+  spc_nextShoot=millis()+2000;
+  tft.fillScreen(SC_BG);
+  tft.drawFastHLine(0,SPC_SHIP_Y+SPC_SHIP_H+4,SW,SC_GNDL);
+  tft.setTextSize(1);tft.setTextColor(RGB(0,100,0),SC_BG);
+  tft.setCursor(4,SPC_SHIP_Y+SPC_SHIP_H+8);tft.print("L/R=move  ROT=fire  MENU=menu");
+  for(int r=0;r<SPC_ROWS;r++)for(int c2=0;c2<SPC_COLS;c2++){
+    int px,py;spc_invPos(r,c2,px,py);spc_drawInv(px,py,r,false);
+  }
+  spc_drawShip(spc_ship,SC_SHIP);spc_drawUI();
 }
 
 void dinoCycle(){
-  bool cUp=bUp(),cDown=bDown();
-  bool jEdge=cUp&&!d_pUp; d_pUp=cUp; d_pDown=cDown;
-  if(bMenu()){gs=GS_MENU;drawMenu();delay(200);return;}
-  if(d_dead){if(jEdge)dinoInit();delay(20);return;}
-  d_frame++; d_spd=constrain(4+d_score/10,4,12);
-  d_ducking=cDown&&d_onGnd;
-  if(jEdge&&d_onGnd&&!d_ducking){d_vy=-13;d_onGnd=false;beep(784,50);}
-  if(!d_onGnd){d_vy++;d_dinoY+=d_vy;if(d_dinoY>=DGY-D_RSH){d_dinoY=DGY-D_RSH;d_vy=0;d_onGnd=true;}}
-  if(d_frame%5==0&&d_onGnd&&!d_ducking)d_legF=1-d_legF;
-  if(!d_onGnd)d_legF=0;
-  if(++d_birdFT>=7){d_birdFT=0;d_birdF=1-d_birdF;}
-  int prevOx=d_obsX; d_obsX-=d_spd;
-  if(d_obsX<-(CACTUSES[d_obsType].w*D_SCALE)){
-    d_drawCactus(prevOx,d_obsType,true);
-    d_obsX=SW+random(40,100);d_obsType=random(CACTUS_COUNT);d_score++;beep(523,35);
+  bool cLeft=bLeft(),cRight=bRight(),cRot=bRot(),cMenu=bMenu();
+  if(cMenu&&!spc_pMenu){gs=GS_MENU;drawMenu();delay(200);return;} spc_pMenu=cMenu;
+  if(spc_dead||spc_win){
+    if(cRot&&!spc_pRot)dinoInit();
+    spc_pRot=cRot;delay(20);return;
   }
-  int prevBx=d_birdX,prevBy=d_birdY; d_birdX-=d_spd+2;
-  if(d_birdX<-36){
-    d_drawBird(prevBx,prevBy,true);
-    d_birdX=SW+random(80,200);d_birdY=DGY-D_RSH-random(10,90);d_score++;
+  // Рух корабля
+  int oldShip=spc_ship;
+  if(cLeft) spc_ship-=4;
+  if(cRight)spc_ship+=4;
+  spc_ship=constrain(spc_ship,SPC_SHIP_W/2,SW-SPC_SHIP_W/2);
+  if(oldShip!=spc_ship){spc_drawShip(oldShip,SC_BG);spc_drawShip(spc_ship,SC_SHIP);}
+  // Вогонь гравця
+  if(cRot&&!spc_pRot&&!spc_bActive){
+    spc_bActive=true;spc_bx=spc_ship;spc_by=SPC_SHIP_Y-8;beep(880,35);
   }
-  for(int i=0;i<2;i++){
-    d_drawCld(d_cldX[i],d_cldY[i],true);
-    d_cldX[i]--; if(d_cldX[i]<-36)d_cldX[i]=SW+random(20,60);
-    d_drawCld(d_cldX[i],d_cldY[i],false);
+  // Куля гравця
+  if(spc_bActive){
+    tft.fillRect(spc_bx-1,spc_by,2,6,SC_BG);
+    spc_by-=SPC_BSPD;
+    if(spc_by<24){spc_bActive=false;}
+    else{
+      bool hit=false;
+      for(int r=0;r<SPC_ROWS&&!hit;r++){
+        for(int c2=0;c2<SPC_COLS&&!hit;c2++){
+          if(!spc_grid[r][c2])continue;
+          int px,py;spc_invPos(r,c2,px,py);
+          if(spc_bx>=px&&spc_bx<=px+SPC_INV_W&&spc_by>=py&&spc_by<=py+SPC_INV_H){
+            spc_drawInv(px,py,r,true);
+            spc_grid[r][c2]=false;spc_alive--;
+            spc_score+=(2-r)*10+10;
+            if(spc_score>spc_best)spc_best=spc_score;
+            beep(660,50);spc_bActive=false;hit=true;
+            spc_calcDelay();spc_drawUI();
+            if(spc_alive==0){
+              spc_win=true;
+              beep(784,80);delay(100);beep(880,80);delay(100);beep(1047,200);
+              spc_drawWin();return;
+            }
+          }
+        }
+      }
+      if(!hit)tft.fillRect(spc_bx-1,spc_by,2,6,SC_BULL);
+    }
   }
-  d_drawDino(true);
-  d_drawCactus(d_obsX,d_obsType,false);
-  d_drawBird(d_birdX,d_birdY,false);
-  d_drawDino(false);
-  tft.fillRect(0,DGY,SW,5,C_DGND);
-  if(d_frame%30==0)d_score++;
-  // Колізії
-  int dx1=DINO_X+4,dx2=DINO_X+D_RSW-4;
-  int dy1=d_dinoY+(d_ducking?D_RSH/2:4),dy2=d_dinoY+D_RSH-2;
-  const CactusType& ct=CACTUSES[d_obsType];
-  int ox1=d_obsX+2,ox2=d_obsX+ct.w*D_SCALE-2;
-  int oy1=DGY-ct.h*D_SCALE+ct.topOffset*D_SCALE;
-  bool hit=(dx2>ox1&&dx1<ox2&&dy2>oy1&&dy1<DGY);
-  if(!hit){
-    int bx1=d_birdX+4,bx2=d_birdX+28,by1=d_birdY+2,by2=d_birdY+14;
-    hit=(dx2>bx1&&dx1<bx2&&dy2>by1&&dy1<by2);
+  // Рух загарбників
+  unsigned long now=millis();
+  if(now>=spc_nextMove){
+    spc_nextMove=now+spc_moveDelay;
+    spc_anim=1-spc_anim;
+    // Стерти
+    for(int r=0;r<SPC_ROWS;r++)for(int c2=0;c2<SPC_COLS;c2++){
+      if(!spc_grid[r][c2])continue;
+      int px,py;spc_invPos(r,c2,px,py);spc_drawInv(px,py,r,true);
+    }
+    // Межі
+    int leftC=SPC_COLS,rightC=-1;
+    for(int r=0;r<SPC_ROWS;r++)for(int c2=0;c2<SPC_COLS;c2++){
+      if(spc_grid[r][c2]){leftC=min(leftC,c2);rightC=max(rightC,c2);}
+    }
+    int newGx=spc_gx+spc_dir*3;
+    int lx=SPC_GX0+newGx+leftC*SPC_GAP_X;
+    int rx=SPC_GX0+newGx+rightC*SPC_GAP_X+SPC_INV_W;
+    if(lx<2||rx>SW-2){spc_dir=-spc_dir;spc_gy+=9;newGx=spc_gx;}
+    spc_gx=newGx;
+    // Досягли корабля?
+    int botR=-1;
+    for(int r=SPC_ROWS-1;r>=0;r--){
+      for(int c2=0;c2<SPC_COLS;c2++)if(spc_grid[r][c2]){botR=r;break;}
+      if(botR>=0)break;
+    }
+    if(botR>=0){
+      int py2=SPC_GY0+spc_gy+botR*SPC_GAP_Y+SPC_INV_H;
+      if(py2>=SPC_SHIP_Y-8){
+        spc_dead=true;spc_lives=0;
+        if(spc_score>spc_best)spc_best=spc_score;
+        beep(196,600);delay(630);spc_drawDead();return;
+      }
+    }
+    // Намалювати
+    for(int r=0;r<SPC_ROWS;r++)for(int c2=0;c2<SPC_COLS;c2++){
+      if(!spc_grid[r][c2])continue;
+      int px,py;spc_invPos(r,c2,px,py);spc_drawInv(px,py,r,false);
+    }
   }
-  if(hit){d_dead=true;if(d_score>d_best)d_best=d_score;beep(196,500);delay(520);d_drawDead();return;}
-  d_drawUI();delay(28);
+  // Постріл загарбників
+  if(now>=spc_nextShoot){
+    spc_nextShoot=now+random(800,2500);
+    int slot=-1;
+    for(int i=0;i<SPC_IBMAX;i++)if(!spc_ibActive[i]){slot=i;break;}
+    if(slot>=0){
+      // Вибрати нижній живий у випадковій колонці
+      for(int tries=0;tries<12;tries++){
+        int c2=random(SPC_COLS);
+        for(int r=SPC_ROWS-1;r>=0;r--){
+          if(spc_grid[r][c2]){
+            int px,py;spc_invPos(r,c2,px,py);
+            spc_ibActive[slot]=true;
+            spc_ibx[slot]=px+SPC_INV_W/2;
+            spc_iby[slot]=py+SPC_INV_H;
+            tries=99;break;
+          }
+        }
+      }
+    }
+  }
+  // Кулі загарбників
+  for(int i=0;i<SPC_IBMAX;i++){
+    if(!spc_ibActive[i])continue;
+    tft.fillRect(spc_ibx[i]-1,spc_iby[i],2,6,SC_BG);
+    spc_iby[i]+=SPC_IBSPD;
+    if(spc_iby[i]>SPC_SHIP_Y+SPC_SHIP_H){spc_ibActive[i]=false;}
+    else{
+      int sx1=spc_ship-SPC_SHIP_W/2,sx2=spc_ship+SPC_SHIP_W/2;
+      if(spc_ibx[i]>=sx1&&spc_ibx[i]<=sx2&&spc_iby[i]>=SPC_SHIP_Y){
+        spc_ibActive[i]=false;
+        spc_drawShip(spc_ship,SC_BG);spc_lives--;beep(196,280);delay(300);
+        if(spc_lives<=0){
+          spc_dead=true;if(spc_score>spc_best)spc_best=spc_score;
+          beep(196,600);delay(630);spc_drawDead();return;
+        }
+        for(int f=0;f<3;f++){spc_drawShip(spc_ship,C_RED);delay(100);spc_drawShip(spc_ship,SC_BG);delay(100);}
+        spc_drawShip(spc_ship,SC_SHIP);spc_drawUI();
+      } else {
+        tft.fillRect(spc_ibx[i]-1,spc_iby[i],2,6,SC_IBULL);
+      }
+    }
+  }
+  spc_pLeft=cLeft;spc_pRight=cRight;spc_pRot=cRot;
+  delay(16);
 }
 
 // ══════════════════════════════════════════════
@@ -737,7 +681,7 @@ void snakeCycle(){
 //  ТЕТРІС
 //  LEFT/RIGHT = рух   DOWN = soft drop
 //  ROT = обертання    UP = hard drop
-//  MENU (1с) = меню
+//  MENU = меню (одиночний натиск)
 // ══════════════════════════════════════════════
 #define T_COLS 10
 #define T_ROWS 20
@@ -762,8 +706,8 @@ const int T_SPEEDS[10] ={800,700,600,500,400,350,300,250,200,150};
 uint8_t t_board[T_ROWS][T_COLS];
 int  t_px,t_py,t_type,t_rot,t_next;
 int  t_score,t_best,t_level,t_lines;
-bool t_dead; unsigned long t_lastDrop,t_menuHold;
-bool t_pUp,t_pDown,t_pLeft,t_pRight,t_pRot,t_pMenu,t_menuHolding;
+bool t_dead; unsigned long t_lastDrop;
+bool t_pUp,t_pDown,t_pLeft,t_pRight,t_pRot,t_pMenu;
 
 void t_drawCell(int col,int row,uint16_t c){
   int x=T_GX+col*T_CELL,y=T_GY+row*T_CELL;
@@ -857,7 +801,7 @@ void t_drawDead(){
 }
 void tetrisInit(){
   t_dead=false;t_score=0;t_level=0;t_lines=0;
-  t_pUp=t_pDown=t_pLeft=t_pRight=t_pRot=t_pMenu=t_menuHolding=false;t_menuHold=0;
+  t_pUp=t_pDown=t_pLeft=t_pRight=t_pRot=t_pMenu=false;
   memset(t_board,0,sizeof(t_board));t_next=random(7);
   tft.fillScreen(RGB(8,10,16));
   for(int r=0;r<T_ROWS;r++)for(int c=0;c<T_COLS;c++)t_drawCell(c,r,TC_EMPTY);
@@ -867,10 +811,8 @@ void tetrisInit(){
 void tetrisCycle(){
   unsigned long now=millis();
   bool cUp=bUp(),cDown=bDown(),cLeft=bLeft(),cRight=bRight(),cRot=bRot(),cMenu=bMenu();
-  // MENU утримати 1 с
-  if(cMenu&&!t_menuHolding){t_menuHolding=true;t_menuHold=now;}
-  if(!cMenu)t_menuHolding=false;
-  if(t_menuHolding&&(now-t_menuHold)>=1000){gs=GS_MENU;drawMenu();delay(200);return;}
+  // MENU = вихід у меню (одиночний натиск, як в інших іграх)
+  if(cMenu&&!t_pMenu){gs=GS_MENU;drawMenu();delay(200);return;}
   if(t_dead){if(cRot&&!t_pRot)tetrisInit();t_pRot=cRot;t_pMenu=cMenu;delay(20);return;}
   // ROT = обертання
   if(cRot&&!t_pRot){
