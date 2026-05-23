@@ -1,0 +1,685 @@
+// ============================================================
+// MINI GAMES ESP32 — ST7789 240x320 + BLUETOOTH CONTROLLER
+// ============================================================
+
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
+#include <SPI.h>
+#include <Arduino.h>
+#include "BluetoothSerial.h"
+
+BluetoothSerial SerialBT;
+
+// ─── Bluetooth стан кнопок ───────────────────
+bool btLeft = false, btDown = false, btRight = false;
+bool btUp   = false, btRot  = false, btMenu  = false;
+bool btHadClient = false;
+
+void btReleaseAll() {
+  btLeft = btDown = btRight = btUp = btRot = btMenu = false;
+}
+
+void btHandleChar(char c) {
+  switch (c) {
+    case 'L': btLeft  = true;  break;
+    case 'l': btLeft  = false; break;
+    case 'D': btDown  = true;  break;
+    case 'd': btDown  = false; break;
+    case 'R': btRight = true;  break;
+    case 'r': btRight = false; break;
+    case 'U': btUp    = true;  break;
+    case 'u': btUp    = false; break;
+    case 'T': btRot   = true;  break;
+    case 't': btRot   = false; break;
+    case 'M': btMenu  = true;  break;
+    case 'm': btMenu  = false; break;
+    case 'X': btReleaseAll();  break;
+  }
+}
+
+void btPoll() {
+  while (SerialBT.available()) {
+    btHandleChar((char)SerialBT.read());
+  }
+  bool hasClient = SerialBT.hasClient();
+  if (!hasClient && btHadClient) btReleaseAll();
+  btHadClient = hasClient;
+}
+
+// ─────────────────────────────────────────────
+// СТРУКТУРИ
+// ─────────────────────────────────────────────
+struct SnakePt { int8_t x, y; };
+
+// ─────────────────────────────────────────────
+// ПІНИ
+// ─────────────────────────────────────────────
+#define TFT_CS   5
+#define TFT_DC   2
+#define TFT_RST  4
+#define TFT_BL   32
+#define BTN_LEFT  22
+#define BTN_DOWN  21
+#define BTN_RIGHT 13
+#define BTN_UP    14
+#define BTN_ROT   26
+#define BTN_MENU  25
+#define BUZZ      33
+
+#define SW 240
+#define SH 320
+Adafruit_ST7789 tft(TFT_CS, TFT_DC, TFT_RST);
+
+// ─────────────────────────────────────────────
+// КОЛЬОРИ
+// ─────────────────────────────────────────────
+#define RGB(r,g,b) ((uint16_t)(((uint16_t(r)&0xF8)<<8)|((uint16_t(g)&0xFC)<<3)|(uint16_t(b)>>3)))
+#define C_BLACK  0x0000
+#define C_WHITE  0xFFFF
+#define C_RED    RGB(220,0,0)
+#define C_CYAN   RGB(0,220,255)
+#define C_GREEN  RGB(0,200,0)
+#define C_YELLOW RGB(255,220,0)
+#define C_PINK   RGB(255,0,255)
+#define C_SBODY  RGB(0,220,60)
+#define C_SHEAD  RGB(0,255,80)
+#define C_SFOOD  RGB(255,60,60)
+#define C_SGRID  RGB(10,30,10)
+#define TC_EMPTY RGB(15,20,15)
+#define TC_I     RGB(0,220,255)
+#define TC_O     RGB(255,220,0)
+#define TC_T     RGB(180,0,220)
+#define TC_S     RGB(0,200,0)
+#define TC_Z     RGB(220,0,0)
+#define TC_J     RGB(0,60,220)
+#define TC_L     RGB(220,100,0)
+#define SC_BG    C_BLACK
+#define SC_INV0  RGB(255,0,200)
+#define SC_INV1  RGB(0,220,255)
+#define SC_INV2  RGB(0,220,60)
+#define SC_SHIP  RGB(0,220,255)
+#define SC_BULL  RGB(255,255,0)
+#define SC_IBULL RGB(255,80,0)
+#define SC_GNDL  RGB(0,70,0)
+
+// ─────────────────────────────────────────────
+// СТАН
+// ─────────────────────────────────────────────
+enum GameState { GS_MENU, GS_BREAKOUT, GS_DINO, GS_SNAKE, GS_TETRIS };
+GameState gs = GS_MENU;
+int menuSel  = 0;
+
+// ─────────────────────────────────────────────
+// ПРОТОТИПИ
+// ─────────────────────────────────────────────
+void breakoutInit(); void breakoutCycle();
+void dinoInit();     void dinoCycle();
+void snakeInit();    void snakeCycle();
+void tetrisInit();   void tetrisCycle();
+void drawMenu();
+
+// ─────────────────────────────────────────────
+// УТИЛІТИ
+// ─────────────────────────────────────────────
+void safeRect(int x,int y,int w,int h,uint16_t c){
+  if(x>=SW||y>=SH||w<=0||h<=0)return;
+  if(x<0){w+=x;x=0;} if(y<0){h+=y;y=0;}
+  if(x+w>SW)w=SW-x; if(y+h>SH)h=SH-y;
+  if(w>0&&h>0)tft.fillRect(x,y,w,h,c);
+}
+void beep(int f,int ms){ if(f>0)tone(BUZZ,f,ms); else noTone(BUZZ); }
+
+// ─── Кнопки: фізичні АБО Bluetooth ──────────
+bool bLeft()  { return digitalRead(BTN_LEFT) ==LOW || btLeft;  }
+bool bDown()  { return digitalRead(BTN_DOWN) ==LOW || btDown;  }
+bool bRight() { return digitalRead(BTN_RIGHT)==LOW || btRight; }
+bool bUp()    { return digitalRead(BTN_UP)   ==LOW || btUp;    }
+bool bRot()   { return digitalRead(BTN_ROT)  ==LOW || btRot;   }
+bool bMenu()  { return digitalRead(BTN_MENU) ==LOW || btMenu;  }
+
+void drawScaledBmp(int x,int y,const uint8_t* bmp,int bmpW,int bmpH,
+                   uint16_t fg,uint16_t bg,int scale){
+  int bpr=(bmpW+7)/8;
+  for(int row=0;row<bmpH;row++)
+    for(int col=0;col<bmpW;col++){
+      uint8_t b=pgm_read_byte(bmp+row*bpr+col/8);
+      bool on=(b>>(7-(col&7)))&1;
+      tft.fillRect(x+col*scale,y+row*scale,scale,scale,on?fg:bg);
+    }
+}
+
+// ══════════════════════════════════════════════
+//  МЕНЮ
+// ══════════════════════════════════════════════
+bool mx_pUp=false,mx_pDown=false,mx_pRot=false;
+
+void drawMenu(){
+  tft.fillScreen(C_BLACK);
+  tft.drawRect(2,2,SW-4,SH-4,C_YELLOW);
+  tft.setTextSize(2); tft.setTextColor(C_YELLOW);
+  tft.setCursor(20,18); tft.print("ESP32 GAMES");
+  tft.setTextSize(1);
+  const char* names[4]={"BREAKOUT","SPACE INVADERS","SNAKE","TETRIS"};
+  uint16_t    cols[4] ={RGB(0,220,255),C_GREEN,RGB(0,200,255),RGB(180,0,220)};
+  for(int i=0;i<4;i++){
+    if(menuSel==i){
+      tft.fillRect(14,60+i*55,SW-28,42,RGB(20,20,20));
+      tft.drawRect(14,60+i*55,SW-28,42,cols[i]);
+      tft.setTextColor(cols[i]); tft.setCursor(24,68+i*55); tft.print(">");
+    }
+    tft.setTextColor(menuSel==i?cols[i]:(uint16_t)RGB(80,80,80));
+    tft.setCursor(36,68+i*55); tft.print(names[i]);
+  }
+  tft.setTextColor(RGB(80,80,80));
+  tft.setCursor(8,285); tft.print("UP/DOWN=вибір  ROT=старт");
+  tft.setCursor(8,296); tft.print("BT: ESP32-GAMES");
+}
+
+void menuLoop(){
+  bool cUp=bUp(),cDown=bDown(),cRot=bRot();
+  if(cUp  &&!mx_pUp)  {menuSel=(menuSel+3)%4;beep(440,40);drawMenu();}
+  if(cDown&&!mx_pDown){menuSel=(menuSel+1)%4;beep(440,40);drawMenu();}
+  if(cRot &&!mx_pRot){
+    beep(659,80); delay(100);
+    switch(menuSel){
+      case 0: gs=GS_BREAKOUT; breakoutInit(); break;
+      case 1: gs=GS_DINO;     dinoInit();     break;
+      case 2: gs=GS_SNAKE;    snakeInit();     break;
+      case 3: gs=GS_TETRIS;   tetrisInit();   break;
+    }
+  }
+  mx_pUp=cUp; mx_pDown=cDown; mx_pRot=cRot;
+}
+
+// ══════════════════════════════════════════════
+//  BREAKOUT
+// ══════════════════════════════════════════════
+#define BRK_COLS 10
+#define BRK_ROWS  8
+#define BRK_SLOT_W 24
+#define BRK_SLOT_H 14
+#define BRK_W 22
+#define BRK_H 12
+#define BRK_Y0 25
+#define PAD_W 52
+#define PAD_H  8
+#define PAD_Y 305
+#define BALL_R 5
+#define BRK_LIVES 3
+
+const uint16_t BRK_ROWCOL[8]={
+  RGB(220,0,0),RGB(220,100,0),RGB(220,200,0),RGB(0,200,0),
+  RGB(0,180,255),RGB(0,50,220),RGB(180,0,220),RGB(180,180,180)
+};
+uint8_t brk_grid[BRK_ROWS][BRK_COLS];
+int brk_padX,brk_ballX,brk_ballY,brk_bvx,brk_bvy;
+bool brk_launched;
+int brk_score,brk_best,brk_lives,brk_bricks;
+bool brk_dead,brk_win,brk_pRot,brk_pMenu;
+
+void brk_drawBrick(int col,int row,bool erase){
+  int x=col*BRK_SLOT_W,y=BRK_Y0+row*BRK_SLOT_H;
+  if(erase){tft.fillRect(x,y,BRK_SLOT_W,BRK_SLOT_H,C_BLACK);return;}
+  uint16_t c=BRK_ROWCOL[row];
+  tft.fillRect(x+1,y+1,BRK_W,BRK_H,c);
+  tft.drawFastHLine(x+1,y+1,BRK_W,C_WHITE);tft.drawFastVLine(x+1,y+1,BRK_H,C_WHITE);
+  tft.drawFastHLine(x+1,y+BRK_H,BRK_W,C_BLACK);tft.drawFastVLine(x+BRK_W,y+1,BRK_H,C_BLACK);
+}
+void brk_drawPad(int cx,uint16_t c){tft.fillRoundRect(cx-PAD_W/2,PAD_Y,PAD_W,PAD_H,3,c);}
+void brk_drawBall(int bx,int by,uint16_t c){tft.fillCircle(bx,by,BALL_R,c);}
+void brk_drawUI(){
+  tft.fillRect(0,0,SW,22,C_BLACK);
+  tft.setTextSize(1);tft.setTextColor(C_WHITE,C_BLACK);
+  tft.setCursor(2,7);tft.print("SC:");tft.print(brk_score);tft.print("  ");
+  tft.setCursor(90,7);tft.print("HI:");tft.print(brk_best);tft.print("  ");
+  for(int i=0;i<BRK_LIVES;i++)
+    tft.fillCircle(190+i*15,11,5,i<brk_lives?C_RED:RGB(40,40,40));
+}
+void brk_endScreen(bool win){
+  tft.fillScreen(C_BLACK);
+  uint16_t fc=win?C_GREEN:C_RED;
+  tft.drawRect(2,2,SW-4,SH-4,fc);tft.drawRect(5,5,SW-10,SH-10,C_YELLOW);
+  tft.setTextSize(3);tft.setTextColor(fc);
+  tft.setCursor(win?30:15,30);tft.print(win?"YOU WIN!":"GAME OVER");
+  tft.setTextSize(2);tft.setTextColor(C_YELLOW);
+  tft.setCursor(20,125);tft.print("SCORE:");tft.print(brk_score);
+  tft.setCursor(20,150);tft.print("BEST: ");tft.print(brk_best);
+  if(!win&&brk_score>0&&brk_score>=brk_best){tft.setTextColor(C_CYAN);tft.setCursor(20,180);tft.print("<<< RECORD! >>>");}
+  tft.setTextSize(1);tft.setTextColor(C_WHITE);
+  tft.setCursor(10,265);tft.print("ROT=RESTART   MENU=MENU");
+}
+void breakoutInit(){
+  brk_dead=false;brk_win=false;brk_launched=false;
+  brk_lives=BRK_LIVES;brk_score=0;brk_bricks=0;
+  brk_pRot=false;brk_pMenu=false;
+  for(int r=0;r<BRK_ROWS;r++)for(int c=0;c<BRK_COLS;c++)brk_grid[r][c]=1;
+  brk_bricks=BRK_ROWS*BRK_COLS;
+  brk_padX=SW/2;brk_ballX=SW/2;brk_ballY=PAD_Y-BALL_R-2;
+  brk_bvx=3;brk_bvy=-5;
+  tft.fillScreen(C_BLACK);
+  tft.drawRect(0,22,SW,SH-22,RGB(50,50,80));
+  for(int r=0;r<BRK_ROWS;r++)for(int c=0;c<BRK_COLS;c++)brk_drawBrick(c,r,false);
+  brk_drawPad(brk_padX,C_CYAN);brk_drawBall(brk_ballX,brk_ballY,C_WHITE);brk_drawUI();
+  tft.setTextSize(1);tft.setTextColor(RGB(80,80,80),C_BLACK);
+  tft.setCursor(45,PAD_Y-14);tft.print("ROT = LAUNCH");
+}
+void breakoutCycle(){
+  bool cL=bLeft(),cR=bRight(),cRot=bRot(),cMenu=bMenu();
+  bool rotEdge=cRot&&!brk_pRot; brk_pRot=cRot;
+  if(cMenu&&!brk_pMenu){gs=GS_MENU;drawMenu();delay(200);return;} brk_pMenu=cMenu;
+  if(brk_dead||brk_win){if(rotEdge)breakoutInit();delay(20);return;}
+  int oldPad=brk_padX;
+  if(cL)brk_padX-=5; if(cR)brk_padX+=5;
+  brk_padX=constrain(brk_padX,PAD_W/2,SW-PAD_W/2);
+  if(rotEdge&&!brk_launched){brk_launched=true;tft.fillRect(35,PAD_Y-18,175,12,C_BLACK);}
+  if(brk_launched){
+    int nbx=brk_ballX+brk_bvx,nby=brk_ballY+brk_bvy;
+    if(nbx-BALL_R<=0){brk_bvx=abs(brk_bvx);nbx=BALL_R+1;beep(440,20);}
+    if(nbx+BALL_R>=SW-1){brk_bvx=-abs(brk_bvx);nbx=SW-BALL_R-2;beep(440,20);}
+    if(nby-BALL_R<=23){brk_bvy=abs(brk_bvy);nby=24+BALL_R;beep(440,20);}
+    int pL=brk_padX-PAD_W/2,pR=brk_padX+PAD_W/2;
+    if(nby+BALL_R>=PAD_Y&&nby+BALL_R<=PAD_Y+PAD_H&&nbx>=pL&&nbx<=pR&&brk_bvy>0){
+      brk_bvy=-abs(brk_bvy);brk_bvx=map(nbx-brk_padX,-PAD_W/2,PAD_W/2,-6,6);
+      if(brk_bvx==0)brk_bvx=1;nby=PAD_Y-BALL_R-1;beep(523,30);
+    }
+    if(nby>SH+BALL_R){
+      brk_lives--;beep(196,400);delay(420);
+      brk_drawBall(brk_ballX,brk_ballY,C_BLACK);
+      if(brk_lives<=0){brk_dead=true;if(brk_score>brk_best)brk_best=brk_score;brk_endScreen(false);return;}
+      brk_ballX=brk_padX;brk_ballY=PAD_Y-BALL_R-2;
+      brk_bvx=(random(2)?3:-3);brk_bvy=-5;brk_launched=false;brk_drawUI();
+      tft.setTextSize(1);tft.setTextColor(RGB(80,80,80),C_BLACK);
+      tft.setCursor(45,PAD_Y-14);tft.print("ROT = LAUNCH");return;
+    }
+    bool hit=false;
+    for(int side=0;side<2&&!hit;side++){
+      int by2=(side==0)?nby-BALL_R:nby+BALL_R;
+      int row=(by2-BRK_Y0)/BRK_SLOT_H,col=nbx/BRK_SLOT_W;
+      if(row>=0&&row<BRK_ROWS&&col>=0&&col<BRK_COLS&&brk_grid[row][col]){
+        brk_grid[row][col]=0;brk_bricks--;brk_score+=10;
+        if(brk_score>brk_best)brk_best=brk_score;
+        brk_drawBrick(col,row,true);brk_bvy=-brk_bvy;beep(880,30);hit=true;
+        if(brk_bricks==0){brk_win=true;brk_endScreen(true);return;}
+      }
+    }
+    for(int side=0;side<2&&!hit;side++){
+      int bx2=(side==0)?nbx-BALL_R:nbx+BALL_R;
+      int row=(nby-BRK_Y0)/BRK_SLOT_H,col=bx2/BRK_SLOT_W;
+      if(row>=0&&row<BRK_ROWS&&col>=0&&col<BRK_COLS&&brk_grid[row][col]){
+        brk_grid[row][col]=0;brk_bricks--;brk_score+=10;
+        if(brk_score>brk_best)brk_best=brk_score;
+        brk_drawBrick(col,row,true);brk_bvx=-brk_bvx;beep(880,30);hit=true;
+        if(brk_bricks==0){brk_win=true;brk_endScreen(true);return;}
+      }
+    }
+    brk_drawBall(brk_ballX,brk_ballY,C_BLACK);
+    brk_ballX=nbx;brk_ballY=nby;
+    brk_drawBall(brk_ballX,brk_ballY,C_WHITE);
+  } else {
+    brk_drawBall(brk_ballX,brk_ballY,C_BLACK);
+    brk_ballX=brk_padX;
+    brk_drawBall(brk_ballX,brk_ballY,C_WHITE);
+  }
+  if(oldPad!=brk_padX){brk_drawPad(oldPad,C_BLACK);brk_drawPad(brk_padX,C_CYAN);}
+  brk_drawUI();delay(16);
+}
+
+// ══════════════════════════════════════════════
+//  SPACE INVADERS
+// ══════════════════════════════════════════════
+#define SPC_COLS 8
+#define SPC_ROWS 3
+#define SPC_INV_W 14
+#define SPC_INV_H 10
+#define SPC_GAP_X 26
+#define SPC_GAP_Y 22
+#define SPC_GX0 13
+#define SPC_GY0 48
+#define SPC_SHIP_Y 298
+#define SPC_SHIP_W 22
+#define SPC_SHIP_H 10
+#define SPC_LIVES 3
+#define SPC_BSPD 7
+#define SPC_IBSPD 3
+#define SPC_IBMAX 3
+
+bool spc_grid[SPC_ROWS][SPC_COLS];
+int spc_gx,spc_gy,spc_dir;
+int spc_ship,spc_score,spc_best,spc_lives,spc_alive,spc_anim;
+bool spc_dead,spc_win;
+bool spc_bActive; int spc_bx,spc_by;
+bool spc_ibActive[SPC_IBMAX]; int spc_ibx[SPC_IBMAX],spc_iby[SPC_IBMAX];
+unsigned long spc_nextMove,spc_nextShoot; int spc_moveDelay;
+bool spc_pLeft,spc_pRight,spc_pRot,spc_pMenu;
+
+uint16_t spc_invColor(int row){if(row==0)return SC_INV0;if(row==1)return SC_INV1;return SC_INV2;}
+
+void spc_drawInv(int px,int py,int row,bool erase){
+  if(erase){tft.fillRect(px,py,SPC_INV_W,SPC_INV_H,SC_BG);return;}
+  uint16_t c=spc_invColor(row);
+  if(row==0){
+    tft.fillRect(px+4,py,6,2,c);tft.fillRect(px,py+2,14,2,c);tft.fillRect(px+2,py+4,10,2,c);
+    tft.fillRect(px+2,py+6,4,2,c);tft.fillRect(px+8,py+6,4,2,c);
+    if(spc_anim==0){tft.fillRect(px,py+8,4,2,c);tft.fillRect(px+10,py+8,4,2,c);}
+    else{tft.fillRect(px+4,py+8,2,2,c);tft.fillRect(px+8,py+8,2,2,c);}
+  } else if(row==1){
+    tft.fillRect(px+2,py,10,2,c);tft.fillRect(px,py+2,14,4,c);
+    tft.fillRect(px,py+6,4,2,c);tft.fillRect(px+10,py+6,4,2,c);
+    if(spc_anim==0){tft.fillRect(px,py+8,2,2,c);tft.fillRect(px+12,py+8,2,2,c);}
+    else{tft.fillRect(px+2,py+8,2,2,c);tft.fillRect(px+10,py+8,2,2,c);}
+  } else {
+    tft.fillRect(px,py,14,2,c);tft.fillRect(px,py+2,14,4,c);
+    tft.fillRect(px,py+6,4,2,c);tft.fillRect(px+10,py+6,4,2,c);
+    if(spc_anim==0){tft.fillRect(px+2,py+8,4,2,c);tft.fillRect(px+8,py+8,4,2,c);}
+    else{tft.fillRect(px,py+8,4,2,c);tft.fillRect(px+10,py+8,4,2,c);}
+  }
+}
+void spc_drawShip(int cx,uint16_t c){
+  int x=cx-SPC_SHIP_W/2,y=SPC_SHIP_Y;
+  tft.fillRect(x,y,SPC_SHIP_W,SPC_SHIP_H,c);
+  tft.fillRect(x+8,y-4,6,4,c);tft.fillRect(x+10,y-8,2,4,c);
+}
+void spc_invPos(int r,int c2,int &px,int &py){
+  px=SPC_GX0+spc_gx+c2*SPC_GAP_X;py=SPC_GY0+spc_gy+r*SPC_GAP_Y;
+}
+void spc_drawUI(){
+  tft.fillRect(0,0,SW,22,C_BLACK);tft.setTextSize(1);tft.setTextColor(C_WHITE,C_BLACK);
+  tft.setCursor(2,7);tft.print("SC:");tft.print(spc_score);tft.print("  ");
+  tft.setCursor(90,7);tft.print("HI:");tft.print(spc_best);tft.print("  ");
+  for(int i=0;i<SPC_LIVES;i++)tft.fillRect(190+i*15,7,10,8,i<spc_lives?SC_SHIP:RGB(40,40,40));
+}
+void spc_drawDead(){
+  tft.fillScreen(C_BLACK);tft.drawRect(2,2,SW-4,SH-4,C_RED);tft.drawRect(5,5,SW-10,SH-10,C_YELLOW);
+  tft.setTextSize(3);tft.setTextColor(C_RED);tft.setCursor(15,30);tft.print("GAME OVER");
+  tft.setTextSize(2);tft.setTextColor(C_YELLOW);
+  tft.setCursor(20,125);tft.print("SCORE:");tft.print(spc_score);
+  tft.setCursor(20,150);tft.print("BEST: ");tft.print(spc_best);
+  if(spc_score>0&&spc_score>=spc_best){tft.setTextColor(C_CYAN);tft.setCursor(20,180);tft.print("<<< RECORD! >>>");}
+  tft.setTextSize(1);tft.setTextColor(C_WHITE);tft.setCursor(10,265);tft.print("ROT=RESTART  MENU=MENU");
+}
+void spc_drawWin(){
+  tft.fillScreen(C_BLACK);tft.drawRect(2,2,SW-4,SH-4,C_GREEN);tft.drawRect(5,5,SW-10,SH-10,C_YELLOW);
+  tft.setTextSize(3);tft.setTextColor(C_GREEN);tft.setCursor(30,30);tft.print("YOU WIN!");
+  tft.setTextSize(2);tft.setTextColor(C_YELLOW);
+  tft.setCursor(20,125);tft.print("SCORE:");tft.print(spc_score);
+  tft.setCursor(20,150);tft.print("BEST: ");tft.print(spc_best);
+  tft.setTextSize(1);tft.setTextColor(C_WHITE);tft.setCursor(10,265);tft.print("ROT=RESTART  MENU=MENU");
+}
+void spc_calcDelay(){spc_moveDelay=constrain(map(spc_alive,0,SPC_COLS*SPC_ROWS,55,480),55,480);}
+
+void dinoInit(){
+  spc_dead=false;spc_win=false;spc_gx=0;spc_gy=0;spc_dir=1;
+  spc_ship=SW/2;spc_score=0;spc_lives=SPC_LIVES;
+  spc_bActive=false;spc_alive=SPC_COLS*SPC_ROWS;spc_anim=0;
+  for(int i=0;i<SPC_IBMAX;i++)spc_ibActive[i]=false;
+  for(int r=0;r<SPC_ROWS;r++)for(int c=0;c<SPC_COLS;c++)spc_grid[r][c]=true;
+  spc_pLeft=spc_pRight=spc_pRot=spc_pMenu=false;
+  spc_calcDelay();spc_nextMove=millis()+spc_moveDelay;spc_nextShoot=millis()+2000;
+  tft.fillScreen(SC_BG);tft.drawFastHLine(0,SPC_SHIP_Y+SPC_SHIP_H+4,SW,SC_GNDL);
+  tft.setTextSize(1);tft.setTextColor(RGB(0,100,0),SC_BG);
+  tft.setCursor(4,SPC_SHIP_Y+SPC_SHIP_H+8);tft.print("L/R=move  ROT=fire  MENU=menu");
+  for(int r=0;r<SPC_ROWS;r++)for(int c2=0;c2<SPC_COLS;c2++){int px,py;spc_invPos(r,c2,px,py);spc_drawInv(px,py,r,false);}
+  spc_drawShip(spc_ship,SC_SHIP);spc_drawUI();
+}
+void dinoCycle(){
+  bool cLeft=bLeft(),cRight=bRight(),cRot=bRot(),cMenu=bMenu();
+  if(cMenu&&!spc_pMenu){gs=GS_MENU;drawMenu();delay(200);return;}spc_pMenu=cMenu;
+  if(spc_dead||spc_win){if(cRot&&!spc_pRot)dinoInit();spc_pRot=cRot;delay(20);return;}
+  int oldShip=spc_ship;
+  if(cLeft)spc_ship-=4;if(cRight)spc_ship+=4;
+  spc_ship=constrain(spc_ship,SPC_SHIP_W/2,SW-SPC_SHIP_W/2);
+  if(oldShip!=spc_ship){spc_drawShip(oldShip,SC_BG);spc_drawShip(spc_ship,SC_SHIP);}
+  if(cRot&&!spc_pRot&&!spc_bActive){spc_bActive=true;spc_bx=spc_ship;spc_by=SPC_SHIP_Y-8;beep(880,35);}
+  if(spc_bActive){
+    tft.fillRect(spc_bx-1,spc_by,2,6,SC_BG);spc_by-=SPC_BSPD;
+    if(spc_by<24){spc_bActive=false;}
+    else{
+      bool hit=false;
+      for(int r=0;r<SPC_ROWS&&!hit;r++)for(int c2=0;c2<SPC_COLS&&!hit;c2++){
+        if(!spc_grid[r][c2])continue;
+        int px,py;spc_invPos(r,c2,px,py);
+        if(spc_bx>=px&&spc_bx<=px+SPC_INV_W&&spc_by>=py&&spc_by<=py+SPC_INV_H){
+          spc_drawInv(px,py,r,true);spc_grid[r][c2]=false;spc_alive--;
+          spc_score+=(2-r)*10+10;if(spc_score>spc_best)spc_best=spc_score;
+          beep(660,50);spc_bActive=false;hit=true;spc_calcDelay();spc_drawUI();
+          if(spc_alive==0){spc_win=true;beep(784,80);delay(100);beep(880,80);delay(100);beep(1047,200);spc_drawWin();return;}
+        }
+      }
+      if(!hit)tft.fillRect(spc_bx-1,spc_by,2,6,SC_BULL);
+    }
+  }
+  unsigned long now=millis();
+  if(now>=spc_nextMove){
+    spc_nextMove=now+spc_moveDelay;spc_anim=1-spc_anim;
+    for(int r=0;r<SPC_ROWS;r++)for(int c2=0;c2<SPC_COLS;c2++){if(!spc_grid[r][c2])continue;int px,py;spc_invPos(r,c2,px,py);spc_drawInv(px,py,r,true);}
+    int leftC=SPC_COLS,rightC=-1;
+    for(int r=0;r<SPC_ROWS;r++)for(int c2=0;c2<SPC_COLS;c2++)if(spc_grid[r][c2]){leftC=min(leftC,c2);rightC=max(rightC,c2);}
+    int newGx=spc_gx+spc_dir*3;
+    int lx=SPC_GX0+newGx+leftC*SPC_GAP_X,rx=SPC_GX0+newGx+rightC*SPC_GAP_X+SPC_INV_W;
+    if(lx<2||rx>SW-2){spc_dir=-spc_dir;spc_gy+=9;newGx=spc_gx;}
+    spc_gx=newGx;
+    int botR=-1;
+    for(int r=SPC_ROWS-1;r>=0;r--){for(int c2=0;c2<SPC_COLS;c2++)if(spc_grid[r][c2]){botR=r;break;}if(botR>=0)break;}
+    if(botR>=0){int py2=SPC_GY0+spc_gy+botR*SPC_GAP_Y+SPC_INV_H;if(py2>=SPC_SHIP_Y-8){spc_dead=true;spc_lives=0;if(spc_score>spc_best)spc_best=spc_score;beep(196,600);delay(630);spc_drawDead();return;}}
+    for(int r=0;r<SPC_ROWS;r++)for(int c2=0;c2<SPC_COLS;c2++){if(!spc_grid[r][c2])continue;int px,py;spc_invPos(r,c2,px,py);spc_drawInv(px,py,r,false);}
+  }
+  if(now>=spc_nextShoot){
+    spc_nextShoot=now+random(800,2500);int slot=-1;
+    for(int i=0;i<SPC_IBMAX;i++)if(!spc_ibActive[i]){slot=i;break;}
+    if(slot>=0){for(int tries=0;tries<12;tries++){int c2=random(SPC_COLS);for(int r=SPC_ROWS-1;r>=0;r--){if(spc_grid[r][c2]){int px,py;spc_invPos(r,c2,px,py);spc_ibActive[slot]=true;spc_ibx[slot]=px+SPC_INV_W/2;spc_iby[slot]=py+SPC_INV_H;tries=99;break;}}}}
+  }
+  for(int i=0;i<SPC_IBMAX;i++){
+    if(!spc_ibActive[i])continue;
+    tft.fillRect(spc_ibx[i]-1,spc_iby[i],2,6,SC_BG);spc_iby[i]+=SPC_IBSPD;
+    if(spc_iby[i]>SPC_SHIP_Y+SPC_SHIP_H){spc_ibActive[i]=false;}
+    else{int sx1=spc_ship-SPC_SHIP_W/2,sx2=spc_ship+SPC_SHIP_W/2;
+      if(spc_ibx[i]>=sx1&&spc_ibx[i]<=sx2&&spc_iby[i]>=SPC_SHIP_Y){
+        spc_ibActive[i]=false;spc_drawShip(spc_ship,SC_BG);spc_lives--;beep(196,280);delay(300);
+        if(spc_lives<=0){spc_dead=true;if(spc_score>spc_best)spc_best=spc_score;beep(196,600);delay(630);spc_drawDead();return;}
+        for(int f=0;f<3;f++){spc_drawShip(spc_ship,C_RED);delay(100);spc_drawShip(spc_ship,SC_BG);delay(100);}
+        spc_drawShip(spc_ship,SC_SHIP);spc_drawUI();
+      }else{tft.fillRect(spc_ibx[i]-1,spc_iby[i],2,6,SC_IBULL);}
+    }
+  }
+  spc_pLeft=cLeft;spc_pRight=cRight;spc_pRot=cRot;delay(16);
+}
+
+// ══════════════════════════════════════════════
+//  ЗМІЙКА
+// ══════════════════════════════════════════════
+#define SN_CELL 10
+#define SN_COLS (SW/SN_CELL)
+#define SN_ROWS ((SH-20)/SN_CELL)
+#define SN_MAX  (SN_COLS*SN_ROWS)
+
+SnakePt sn_body[SN_MAX]; int sn_len;
+SnakePt sn_dir,sn_food;
+int sn_score,sn_best; bool sn_dead;
+int sn_frame,sn_spd;
+bool sn_pUp,sn_pDown,sn_pLeft,sn_pRight,sn_pMenu;
+
+int snX(int cx){return cx*SN_CELL;}
+int snY(int cy){return cy*SN_CELL+20;}
+void sn_placeFood(){bool ok=false;while(!ok){sn_food.x=random(SN_COLS);sn_food.y=random(SN_ROWS);ok=true;for(int i=0;i<sn_len;i++)if(sn_body[i].x==sn_food.x&&sn_body[i].y==sn_food.y){ok=false;break;}}}
+void sn_drawCell(int cx,int cy,uint16_t c){tft.fillRect(snX(cx)+1,snY(cy)+1,SN_CELL-2,SN_CELL-2,c);}
+void sn_drawUI(){
+  tft.fillRect(0,0,SW,20,C_BLACK);tft.setTextSize(1);tft.setTextColor(RGB(0,220,60),C_BLACK);
+  tft.setCursor(2,6);tft.print("SC:");tft.print(sn_score);tft.print("   ");
+  tft.setCursor(100,6);tft.print("HI:");tft.print(sn_best);tft.print("   ");
+  tft.setCursor(190,6);tft.print("LN:");tft.print(sn_len);
+}
+void sn_drawDead(){
+  tft.fillScreen(C_BLACK);tft.drawRect(2,2,SW-4,SH-4,C_RED);tft.drawRect(5,5,SW-10,SH-10,C_YELLOW);
+  tft.setTextSize(3);tft.setTextColor(C_RED);tft.setCursor(15,30);tft.print("GAME OVER");
+  tft.setTextSize(2);tft.setTextColor(C_YELLOW);
+  tft.setCursor(20,125);tft.print("SCORE:");tft.print(sn_score);
+  tft.setCursor(20,150);tft.print("BEST: ");tft.print(sn_best);
+  if(sn_score>0&&sn_score>=sn_best){tft.setTextColor(C_CYAN);tft.setCursor(20,180);tft.print("<<< RECORD! >>>");}
+  tft.setTextSize(1);tft.setTextColor(C_WHITE);tft.setCursor(10,265);tft.print("UP=RESTART  MENU=MENU");
+}
+void snakeInit(){
+  sn_dead=false;sn_score=0;sn_frame=0;sn_spd=10;sn_len=4;
+  sn_dir={1,0};sn_pUp=sn_pDown=sn_pLeft=sn_pRight=sn_pMenu=false;
+  for(int i=0;i<sn_len;i++){sn_body[i].x=(int8_t)(6-i);sn_body[i].y=5;}
+  sn_placeFood();
+  tft.fillScreen(RGB(10,20,10));
+  for(int cx=0;cx<SN_COLS;cx++)for(int cy=0;cy<SN_ROWS;cy++)tft.fillRect(snX(cx)+1,snY(cy)+1,SN_CELL-2,SN_CELL-2,C_SGRID);
+  for(int i=0;i<sn_len;i++)sn_drawCell(sn_body[i].x,sn_body[i].y,i==0?C_SHEAD:C_SBODY);
+  sn_drawCell(sn_food.x,sn_food.y,C_SFOOD);sn_drawUI();
+}
+void snakeCycle(){
+  bool cUp=bUp(),cDown=bDown(),cLeft=bLeft(),cRight=bRight(),cMenu=bMenu();
+  if(cMenu&&!sn_pMenu){gs=GS_MENU;drawMenu();delay(200);return;}sn_pMenu=cMenu;
+  if(sn_dead){if(cUp&&!sn_pUp)snakeInit();sn_pUp=cUp;delay(20);return;}
+  if(cUp&&!sn_pUp&&sn_dir.y==0){sn_dir.x=0;sn_dir.y=-1;}
+  if(cDown&&!sn_pDown&&sn_dir.y==0){sn_dir.x=0;sn_dir.y=1;}
+  if(cLeft&&!sn_pLeft&&sn_dir.x==0){sn_dir.x=-1;sn_dir.y=0;}
+  if(cRight&&!sn_pRight&&sn_dir.x==0){sn_dir.x=1;sn_dir.y=0;}
+  sn_pUp=cUp;sn_pDown=cDown;sn_pLeft=cLeft;sn_pRight=cRight;
+  sn_frame++;sn_spd=constrain(10-sn_score/5,3,10);
+  if(sn_frame%sn_spd!=0){delay(30);return;}
+  SnakePt nh;nh.x=(int8_t)(sn_body[0].x+sn_dir.x);nh.y=(int8_t)(sn_body[0].y+sn_dir.y);
+  if(nh.x<0||nh.x>=SN_COLS||nh.y<0||nh.y>=SN_ROWS){sn_dead=true;if(sn_score>sn_best)sn_best=sn_score;beep(196,500);delay(520);sn_drawDead();return;}
+  for(int i=0;i<sn_len-1;i++)if(sn_body[i].x==nh.x&&sn_body[i].y==nh.y){sn_dead=true;if(sn_score>sn_best)sn_best=sn_score;beep(196,500);delay(520);sn_drawDead();return;}
+  bool ate=(nh.x==sn_food.x&&nh.y==sn_food.y);
+  if(!ate){sn_drawCell(sn_body[sn_len-1].x,sn_body[sn_len-1].y,C_SGRID);for(int i=sn_len-1;i>0;i--)sn_body[i]=sn_body[i-1];}
+  else{if(sn_len<SN_MAX){for(int i=sn_len;i>0;i--)sn_body[i]=sn_body[i-1];sn_len++;}else{for(int i=sn_len-1;i>0;i--)sn_body[i]=sn_body[i-1];}sn_score+=10;beep(880,60);sn_placeFood();sn_drawCell(sn_food.x,sn_food.y,C_SFOOD);}
+  sn_body[0]=nh;
+  if(sn_len>1)sn_drawCell(sn_body[1].x,sn_body[1].y,C_SBODY);
+  sn_drawCell(sn_body[0].x,sn_body[0].y,C_SHEAD);sn_drawUI();delay(30);
+}
+
+// ══════════════════════════════════════════════
+//  ТЕТРІС
+// ══════════════════════════════════════════════
+#define T_COLS 10
+#define T_ROWS 20
+#define T_CELL 11
+#define T_GX 5
+#define T_GY 14
+#define T_PX 120
+
+const uint16_t T_COLORS[8]={TC_EMPTY,TC_I,TC_O,TC_T,TC_S,TC_Z,TC_J,TC_L};
+const int8_t T_PIECES[7][4][4][2]={
+  {{{0,1},{1,1},{2,1},{3,1}},{{2,0},{2,1},{2,2},{2,3}},{{0,2},{1,2},{2,2},{3,2}},{{1,0},{1,1},{1,2},{1,3}}},
+  {{{1,0},{2,0},{1,1},{2,1}},{{1,0},{2,0},{1,1},{2,1}},{{1,0},{2,0},{1,1},{2,1}},{{1,0},{2,0},{1,1},{2,1}}},
+  {{{1,0},{0,1},{1,1},{2,1}},{{1,0},{1,1},{2,1},{1,2}},{{0,1},{1,1},{2,1},{1,2}},{{1,0},{0,1},{1,1},{1,2}}},
+  {{{1,0},{2,0},{0,1},{1,1}},{{1,0},{1,1},{2,1},{2,2}},{{1,1},{2,1},{0,2},{1,2}},{{0,0},{0,1},{1,1},{1,2}}},
+  {{{0,0},{1,0},{1,1},{2,1}},{{2,0},{1,1},{2,1},{1,2}},{{0,1},{1,1},{1,2},{2,2}},{{1,0},{0,1},{1,1},{0,2}}},
+  {{{0,0},{0,1},{1,1},{2,1}},{{1,0},{2,0},{1,1},{1,2}},{{0,1},{1,1},{2,1},{2,2}},{{1,0},{1,1},{0,2},{1,2}}},
+  {{{2,0},{0,1},{1,1},{2,1}},{{1,0},{1,1},{1,2},{2,2}},{{0,1},{1,1},{2,1},{0,2}},{{0,0},{1,0},{1,1},{1,2}}},
+};
+const int T_LINE_PTS[5]={0,100,300,500,800};
+const int T_SPEEDS[10]={800,700,600,500,400,350,300,250,200,150};
+
+uint8_t t_board[T_ROWS][T_COLS];
+int t_px,t_py,t_type,t_rot,t_next;
+int t_score,t_best,t_level,t_lines;
+bool t_dead; unsigned long t_lastDrop;
+bool t_pUp,t_pDown,t_pLeft,t_pRight,t_pRot,t_pMenu;
+
+void t_drawCell(int col,int row,uint16_t c){
+  int x=T_GX+col*T_CELL,y=T_GY+row*T_CELL;
+  tft.fillRect(x+1,y+1,T_CELL-2,T_CELL-2,c);
+  if(c!=TC_EMPTY){tft.drawFastHLine(x+1,y+1,T_CELL-2,C_WHITE);tft.drawFastVLine(x+1,y+1,T_CELL-2,C_WHITE);tft.drawFastHLine(x+1,y+T_CELL-2,T_CELL-2,C_BLACK);tft.drawFastVLine(x+T_CELL-2,y+1,T_CELL-2,C_BLACK);}
+}
+void t_drawBoard(){for(int r=0;r<T_ROWS;r++)for(int c=0;c<T_COLS;c++)t_drawCell(c,r,T_COLORS[t_board[r][c]]);}
+void t_drawPiece(int px,int py,int type,int rot,bool erase=false){
+  uint16_t c=erase?TC_EMPTY:T_COLORS[type+1];
+  for(int i=0;i<4;i++){int col=px+T_PIECES[type][rot][i][0],row=py+T_PIECES[type][rot][i][1];if(row>=0&&row<T_ROWS&&col>=0&&col<T_COLS)t_drawCell(col,row,c);}
+}
+void t_drawNext(){
+  int nx=T_PX+6,ny=80;tft.fillRect(nx,ny,4*T_CELL+2,4*T_CELL+2,RGB(10,10,18));
+  uint16_t c=T_COLORS[t_next+1];
+  for(int i=0;i<4;i++)tft.fillRect(nx+T_PIECES[t_next][0][i][0]*T_CELL+1,ny+T_PIECES[t_next][0][i][1]*T_CELL+1,T_CELL-2,T_CELL-2,c);
+}
+void t_drawPanel(){
+  tft.fillRect(T_PX,0,SW-T_PX,SH,RGB(8,10,16));tft.drawRect(T_PX,0,SW-T_PX,SH,RGB(40,50,70));
+  tft.setTextColor(RGB(180,200,255));tft.setTextSize(1);
+  tft.setCursor(T_PX+6,8);tft.print("TETRIS");
+  tft.setCursor(T_PX+6,26);tft.print("SCORE");tft.setTextColor(C_YELLOW);tft.setCursor(T_PX+6,36);tft.print(t_score);tft.print("    ");
+  tft.setTextColor(RGB(180,200,255));tft.setCursor(T_PX+6,52);tft.print("BEST");tft.setTextColor(RGB(120,150,255));tft.setCursor(T_PX+6,62);tft.print(t_best);tft.print("    ");
+  tft.setTextColor(RGB(180,200,255));tft.setCursor(T_PX+6,78);tft.print("NEXT:");t_drawNext();
+  tft.setTextColor(RGB(180,200,255));tft.setCursor(T_PX+6,168);tft.print("LVL");tft.setTextColor(C_GREEN);tft.setCursor(T_PX+6,178);tft.print(t_level);tft.print(" ");
+  tft.setTextColor(RGB(180,200,255));tft.setCursor(T_PX+6,194);tft.print("LNS");tft.setTextColor(C_CYAN);tft.setCursor(T_PX+6,204);tft.print(t_lines);tft.print(" ");
+}
+bool t_valid(int px,int py,int type,int rot){
+  for(int i=0;i<4;i++){int col=px+T_PIECES[type][rot][i][0],row=py+T_PIECES[type][rot][i][1];if(col<0||col>=T_COLS||row>=T_ROWS)return false;if(row>=0&&t_board[row][col]!=0)return false;}return true;
+}
+void t_lockPiece(){for(int i=0;i<4;i++){int col=t_px+T_PIECES[t_type][t_rot][i][0],row=t_py+T_PIECES[t_type][t_rot][i][1];if(row>=0&&row<T_ROWS&&col>=0&&col<T_COLS)t_board[row][col]=(uint8_t)(t_type+1);}}
+void t_clearLines(){
+  int cleared=0;
+  for(int r=T_ROWS-1;r>=0;){bool full=true;for(int c=0;c<T_COLS;c++)if(!t_board[r][c]){full=false;break;}if(full){for(int c=0;c<T_COLS;c++)t_drawCell(c,r,C_WHITE);delay(60);for(int rr=r;rr>0;rr--)for(int c=0;c<T_COLS;c++)t_board[rr][c]=t_board[rr-1][c];for(int c=0;c<T_COLS;c++)t_board[0][c]=0;cleared++;}else{r--;}}
+  if(cleared){t_lines+=cleared;t_score+=T_LINE_PTS[min(cleared,4)]*(t_level+1);if(t_score>t_best)t_best=t_score;t_level=min(9,t_lines/10);t_drawBoard();t_drawPanel();if(cleared==4){beep(1047,100);delay(120);beep(1047,100);}else beep(880,80);}
+}
+bool t_spawn(){t_type=t_next;t_next=random(7);t_rot=0;t_px=3;t_py=0;if(!t_valid(t_px,t_py,t_type,t_rot))return false;t_drawPanel();return true;}
+void t_drawDead(){
+  tft.fillScreen(C_BLACK);tft.drawRect(2,2,SW-4,SH-4,C_RED);tft.drawRect(5,5,SW-10,SH-10,C_YELLOW);
+  tft.setTextSize(3);tft.setTextColor(C_RED);tft.setCursor(15,30);tft.print("GAME OVER");
+  tft.setTextSize(2);tft.setTextColor(C_YELLOW);
+  tft.setCursor(20,110);tft.print("SCORE:");tft.print(t_score);tft.setCursor(20,135);tft.print("BEST: ");tft.print(t_best);tft.setCursor(20,160);tft.print("LINES:");tft.print(t_lines);tft.setCursor(20,185);tft.print("LEVEL:");tft.print(t_level);
+  if(t_score>0&&t_score>=t_best){tft.setTextColor(C_CYAN);tft.setCursor(20,215);tft.print("<<< RECORD! >>>");}
+  tft.setTextSize(1);tft.setTextColor(C_WHITE);tft.setCursor(10,265);tft.print("ROT=RESTART  MENU=MENU");
+}
+void tetrisInit(){
+  t_dead=false;t_score=0;t_level=0;t_lines=0;t_pUp=t_pDown=t_pLeft=t_pRight=t_pRot=t_pMenu=false;
+  memset(t_board,0,sizeof(t_board));t_next=random(7);
+  tft.fillScreen(RGB(8,10,16));
+  for(int r=0;r<T_ROWS;r++)for(int c=0;c<T_COLS;c++)t_drawCell(c,r,TC_EMPTY);
+  tft.drawRect(T_GX-1,T_GY-1,T_COLS*T_CELL+2,T_ROWS*T_CELL+2,RGB(60,80,120));
+  t_drawPanel();t_spawn();t_drawPiece(t_px,t_py,t_type,t_rot);t_lastDrop=millis();
+}
+void tetrisCycle(){
+  unsigned long now=millis();
+  bool cUp=bUp(),cDown=bDown(),cLeft=bLeft(),cRight=bRight(),cRot=bRot(),cMenu=bMenu();
+  if(cMenu&&!t_pMenu){gs=GS_MENU;drawMenu();delay(200);return;}
+  if(t_dead){if(cRot&&!t_pRot)tetrisInit();t_pRot=cRot;t_pMenu=cMenu;delay(20);return;}
+  if(cRot&&!t_pRot){int nr=(t_rot+1)%4;if(t_valid(t_px,t_py,t_type,nr)){t_drawPiece(t_px,t_py,t_type,t_rot,true);t_rot=nr;t_drawPiece(t_px,t_py,t_type,t_rot);beep(440,30);}else if(t_valid(t_px+1,t_py,t_type,nr)){t_drawPiece(t_px,t_py,t_type,t_rot,true);t_px++;t_rot=nr;t_drawPiece(t_px,t_py,t_type,t_rot);beep(440,30);}else if(t_valid(t_px-1,t_py,t_type,nr)){t_drawPiece(t_px,t_py,t_type,t_rot,true);t_px--;t_rot=nr;t_drawPiece(t_px,t_py,t_type,t_rot);beep(440,30);}}
+  if(cLeft&&!t_pLeft&&t_valid(t_px-1,t_py,t_type,t_rot)){t_drawPiece(t_px,t_py,t_type,t_rot,true);t_px--;t_drawPiece(t_px,t_py,t_type,t_rot);}
+  if(cRight&&!t_pRight&&t_valid(t_px+1,t_py,t_type,t_rot)){t_drawPiece(t_px,t_py,t_type,t_rot,true);t_px++;t_drawPiece(t_px,t_py,t_type,t_rot);}
+  if(cDown&&!t_pDown&&t_valid(t_px,t_py+1,t_type,t_rot)){t_drawPiece(t_px,t_py,t_type,t_rot,true);t_py++;t_drawPiece(t_px,t_py,t_type,t_rot);t_score++;t_lastDrop=now;}
+  if(cUp&&!t_pUp){t_drawPiece(t_px,t_py,t_type,t_rot,true);while(t_valid(t_px,t_py+1,t_type,t_rot)){t_py++;t_score+=2;}t_drawPiece(t_px,t_py,t_type,t_rot);t_lockPiece();beep(294,40);t_clearLines();if(!t_spawn()){t_dead=true;if(t_score>t_best)t_best=t_score;beep(196,600);delay(630);t_drawDead();}else{t_drawPiece(t_px,t_py,t_type,t_rot);t_drawPanel();}t_pUp=cUp;t_pDown=cDown;t_pLeft=cLeft;t_pRight=cRight;t_pRot=cRot;t_pMenu=cMenu;delay(16);return;}
+  t_pUp=cUp;t_pDown=cDown;t_pLeft=cLeft;t_pRight=cRight;t_pRot=cRot;t_pMenu=cMenu;
+  if((now-t_lastDrop)>=(unsigned long)T_SPEEDS[t_level]){t_lastDrop=now;if(t_valid(t_px,t_py+1,t_type,t_rot)){t_drawPiece(t_px,t_py,t_type,t_rot,true);t_py++;t_drawPiece(t_px,t_py,t_type,t_rot);}else{t_lockPiece();beep(294,40);t_clearLines();if(!t_spawn()){t_dead=true;if(t_score>t_best)t_best=t_score;beep(196,600);delay(630);t_drawDead();return;}t_drawPiece(t_px,t_py,t_type,t_rot);t_drawPanel();}}
+  delay(16);
+}
+
+// ══════════════════════════════════════════════
+//  SETUP / LOOP
+// ══════════════════════════════════════════════
+void setup(){
+  Serial.begin(115200);
+  pinMode(TFT_BL,OUTPUT);digitalWrite(TFT_BL,HIGH);
+  pinMode(BTN_LEFT,INPUT_PULLUP);pinMode(BTN_DOWN,INPUT_PULLUP);
+  pinMode(BTN_RIGHT,INPUT_PULLUP);pinMode(BTN_UP,INPUT_PULLUP);
+  pinMode(BTN_ROT,INPUT_PULLUP);pinMode(BTN_MENU,INPUT_PULLUP);
+  pinMode(BUZZ,OUTPUT);
+  SPI.begin(18,-1,23,TFT_CS);delay(20);
+  tft.init(SW,SH);delay(100);
+  tft.setRotation(0);tft.invertDisplay(false);
+  randomSeed(analogRead(34));
+
+  // ── Bluetooth ──
+  if(!SerialBT.begin("ESP32-GAMES")){
+    Serial.println("Bluetooth FAILED");
+  }else{
+    Serial.println("Bluetooth OK: ESP32-GAMES");
+  }
+
+  int mel[]={659,659,659,523,659,784,392};
+  int dur[]={100,100,100,100,100,200,200};
+  for(int i=0;i<7;i++){beep(mel[i],dur[i]);delay(dur[i]+30);}
+  noTone(BUZZ);
+  gs=GS_MENU;drawMenu();
+}
+
+void loop(){
+  btPoll(); // ← Bluetooth опитування
+  switch(gs){
+    case GS_MENU:     menuLoop();      break;
+    case GS_BREAKOUT: breakoutCycle(); break;
+    case GS_DINO:     dinoCycle();     break;
+    case GS_SNAKE:    snakeCycle();    break;
+    case GS_TETRIS:   tetrisCycle();   break;
+  }
+}
