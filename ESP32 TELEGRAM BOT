@@ -1,0 +1,555 @@
+// ============================================================
+// ESP32 TELEGRAM BOT — ST7789 240x320
+// Only bot functions, no game
+// Libraries needed:
+//   1. ArduinoJson          (Benoit Blanchon, v6.x)
+//   2. UniversalTelegramBot (Brian Lough)
+//   3. Adafruit GFX Library
+//   4. Adafruit ST7735 and ST7789
+// ============================================================
+
+#include <ArduinoJson.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
+#include <SPI.h>
+
+// ─── Settings ────────────────────────────────────────────────
+const char* ssid     = "   ";
+const char* password = "    ";
+#define BOTtoken "    "
+const String MY_ID   = "    ";
+
+// ─── ST7789 pins ─────────────────────────────────────────────
+//  VCC -> 3.3V  |  GND -> GND
+//  SCL -> 18    |  SDA -> 23
+//  RES -> 4     |  DC  -> 2
+//  CS  -> 5     |  BLK -> 32
+#define TFT_CS  5
+#define TFT_DC  2
+#define TFT_RST 4
+#define TFT_BL  32
+#define SW 240
+#define SH 320
+
+Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+
+// ─── Colors ──────────────────────────────────────────────────
+#define RGB565(r,g,b) ((uint16_t)(((uint16_t(r)&0xF8)<<8)|((uint16_t(g)&0xFC)<<3)|(uint16_t(b)>>3)))
+#define C_BLACK   0x0000
+#define C_WHITE   0xFFFF
+#define C_BG      RGB565(5,8,15)
+#define C_AMBER   RGB565(255,176,0)
+#define C_AMBERD  RGB565(140,80,0)
+#define C_GREEN   RGB565(0,210,60)
+#define C_RED     RGB565(220,0,0)
+#define C_CYAN    RGB565(0,210,255)
+#define C_YELLOW  RGB565(255,215,0)
+#define C_GRAY    RGB565(90,90,90)
+#define C_LGRAY   RGB565(160,160,160)
+#define C_DKGRAY  RGB565(20,20,20)
+#define C_TEAL    RGB565(0,170,170)
+#define C_PINK    RGB565(255,80,180)
+#define C_PURPLE  RGB565(170,0,220)
+#define C_BLUE    RGB565(30,100,255)
+
+// ─── State ───────────────────────────────────────────────────
+enum AppState { ST_IDLE, ST_MSG, ST_HEART, ST_WEATHER, ST_INFO };
+AppState state = ST_IDLE;
+
+unsigned long lastPoll    = 0;
+unsigned long lastAnim    = 0;
+unsigned long shownAt     = 0;
+int           animFrame   = 0;
+const unsigned long POLL_MS  = 300;
+const unsigned long SHOW_MS  = 7000;
+
+WiFiClientSecure     client;
+UniversalTelegramBot bot(BOTtoken, client);
+
+// Weather data (sent by user via Telegram)
+String w_city = "N/A";
+String w_temp = "--";
+String w_desc = "No data";
+
+// ════════════════════════════════════════════════════════════
+//  DRAW HELPERS
+// ════════════════════════════════════════════════════════════
+
+void drawBorder(uint16_t c) {
+  tft.drawRoundRect(2, 2, SW-4, SH-4, 10, c);
+  tft.drawRoundRect(5, 5, SW-10, SH-10, 7, C_DKGRAY);
+}
+
+void drawDivider(int y, uint16_t c) {
+  tft.drawFastHLine(12, y, SW-24, c);
+}
+
+void drawHeader(const char* label, uint16_t bg, uint16_t fg) {
+  tft.fillRect(0, 0, SW, 38, bg);
+  tft.setTextSize(2);
+  tft.setTextColor(fg);
+  int x = (SW - (int)strlen(label) * 12) / 2;
+  tft.setCursor(x < 6 ? 6 : x, 11);
+  tft.print(label);
+  drawDivider(38, fg);
+}
+
+void drawFooter(const char* label, uint16_t c) {
+  tft.fillRect(0, SH-24, SW, 24, C_DKGRAY);
+  tft.drawFastHLine(0, SH-24, SW, c);
+  tft.setTextSize(1);
+  tft.setTextColor(c);
+  tft.setCursor(8, SH-15);
+  tft.print(label);
+}
+
+// Spinner (top-right corner, non-blocking)
+void tickSpinner() {
+  if (millis() - lastAnim < 550) return;
+  lastAnim = millis();
+  animFrame++;
+  const char* f[] = {"|", "/", "-", "\\"};
+  tft.setTextSize(2);
+  tft.setTextColor(C_AMBERD);
+  tft.setCursor(SW-22, SH-26);
+  tft.print(f[animFrame & 3]);
+}
+
+// Word-wrap printer
+void printWrap(const String& s, int x, int y, int maxW,
+               int lh, uint16_t c, uint8_t sz) {
+  tft.setTextSize(sz);
+  tft.setTextColor(c);
+  int cw   = 6 * sz;
+  int cols = maxW / cw;
+  int i = 0;
+  while (i < (int)s.length() && y < SH - 30) {
+    int end = min(i + cols, (int)s.length());
+    if (end < (int)s.length()) {
+      int sp = s.lastIndexOf(' ', end);
+      if (sp > i) end = sp + 1;
+    }
+    tft.setCursor(x, y);
+    tft.print(s.substring(i, end));
+    y += lh;
+    i  = end;
+  }
+}
+
+void drawHeart(int cx, int cy, int r, uint16_t c) {
+  tft.fillCircle(cx - r/2, cy - r/4, r/2, c);
+  tft.fillCircle(cx + r/2, cy - r/4, r/2, c);
+  tft.fillTriangle(cx - r, cy, cx + r, cy, cx, cy + r, c);
+}
+
+// ════════════════════════════════════════════════════════════
+//  SCREENS
+// ════════════════════════════════════════════════════════════
+
+// ─── IDLE ────────────────────────────────────────────────────
+void showIdle() {
+  state = ST_IDLE;
+  tft.fillScreen(C_BG);
+  drawBorder(C_AMBERD);
+  drawHeader("ESP32 BOT", RGB565(18,8,0), C_AMBER);
+
+  // Big @ icon
+  tft.setTextSize(5);
+  tft.setTextColor(RGB565(50,30,0));
+  tft.setCursor(72, 55);
+  tft.print("@");
+
+  tft.setTextSize(2);
+  tft.setTextColor(C_AMBER);
+  tft.setCursor(38, 128);
+  tft.print("WAITING...");
+
+  drawDivider(152, C_AMBERD);
+
+  // Command list
+  struct { const char* line; uint16_t col; } cmds[] = {
+    { "/heart            - Heart",    C_PINK   },
+    { "/weather C T Desc - Weather",  C_CYAN   },
+    { "/ip               - Network",  C_TEAL   },
+    { "/uptime           - Uptime",   C_PURPLE },
+    { "/clear            - Clear",    C_GRAY   },
+    { "Any text          - Display",  C_LGRAY  },
+  };
+  int y = 162;
+  tft.setTextSize(1);
+  for (auto& cmd : cmds) {
+    tft.setTextColor(cmd.col);
+    tft.setCursor(14, y);
+    tft.print(cmd.line);
+    y += 14;
+  }
+
+  // WiFi status footer
+  char buf[40];
+  snprintf(buf, sizeof(buf), "IP: %s", WiFi.localIP().toString().c_str());
+  drawFooter(buf, C_GREEN);
+}
+
+// ─── TEXT MESSAGE ────────────────────────────────────────────
+void showMessage(const String& from, const String& text, uint16_t accent) {
+  state   = ST_MSG;
+  shownAt = millis();
+
+  tft.fillScreen(C_BG);
+  drawBorder(accent);
+
+  // Header with sender
+  tft.fillRect(0, 0, SW, 38, RGB565(8,16,35));
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(10, 7);
+  tft.print("From:");
+  tft.setTextColor(accent);
+  tft.setCursor(10, 19);
+  tft.print(from.length() > 30 ? from.substring(0,30) + "~" : from);
+  drawDivider(38, accent);
+
+  // Opening quote mark
+  tft.setTextSize(4);
+  tft.setTextColor(accent);
+  tft.setCursor(8, 42);
+  tft.print("\"");
+
+  // Message body
+  printWrap(text, 12, 56, SW-24, 17, C_WHITE, 1);
+
+  drawFooter("Auto-close 7s...", C_GRAY);
+}
+
+// ─── HEART ───────────────────────────────────────────────────
+void showHeart() {
+  state   = ST_HEART;
+  shownAt = millis();
+
+  tft.fillScreen(C_BLACK);
+  drawBorder(C_PINK);
+
+  tft.setTextSize(2);
+  tft.setTextColor(C_PINK);
+  tft.setCursor(48, 22);
+  tft.print("WITH LOVE!");
+
+  // Layered hearts
+  drawHeart(SW/2, 165, 68, C_RED);
+  drawHeart(SW/2, 163, 48, RGB565(255,50,75));
+  drawHeart(SW/2, 158, 24, RGB565(255,150,165));
+
+  // Decoration row
+  tft.setTextSize(1);
+  tft.setTextColor(RGB565(200,50,120));
+  tft.setCursor(28, 262);
+  tft.print("<3  <3  <3  <3  <3  <3");
+
+  drawFooter("Sent from ESP32!", C_PINK);
+}
+
+// ─── WEATHER ─────────────────────────────────────────────────
+void showWeather() {
+  state   = ST_WEATHER;
+  shownAt = millis();
+
+  tft.fillScreen(C_BG);
+  drawBorder(C_CYAN);
+  drawHeader("WEATHER", RGB565(0,28,45), C_CYAN);
+
+  // City name
+  tft.setTextSize(2);
+  tft.setTextColor(C_WHITE);
+  tft.setCursor(12, 50);
+  tft.print(w_city);
+
+  // ASCII cloud
+  tft.setTextSize(1);
+  tft.setTextColor(C_LGRAY);
+  tft.setCursor(12, 80);  tft.print("  .---.");
+  tft.setCursor(12, 90);  tft.print("-(     )-");
+  tft.setCursor(12, 100); tft.print(" `-----'");
+
+  // Temperature (big)
+  tft.setTextSize(5);
+  tft.setTextColor(C_CYAN);
+  tft.setCursor(105, 68);
+  tft.print(w_temp);
+  tft.setTextSize(2);
+  tft.setTextColor(C_CYAN);
+  tft.print(" C");
+
+  drawDivider(132, C_CYAN);
+
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(12, 142); tft.print("Condition:");
+  tft.setTextColor(C_WHITE);
+  tft.setCursor(12, 154); tft.print(w_desc);
+
+  drawDivider(172, C_AMBERD);
+
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(12, 180); tft.print("Update via Telegram:");
+  tft.setTextColor(C_AMBERD);
+  tft.setCursor(12, 192); tft.print("/weather City Temp Desc");
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(12, 206); tft.print("Ex: /weather Kyiv 22 Sunny");
+
+  drawFooter("Data from Telegram", C_CYAN);
+}
+
+// ─── NETWORK INFO ────────────────────────────────────────────
+void showIP() {
+  state   = ST_INFO;
+  shownAt = millis();
+
+  tft.fillScreen(C_BG);
+  drawBorder(C_TEAL);
+  drawHeader("NETWORK", RGB565(0,18,18), C_TEAL);
+
+  struct { const char* label; String value; uint16_t col; int y; } rows[] = {
+    { "IP Address:",  WiFi.localIP().toString(),  C_WHITE,  70 },
+    { "SSID:",        String(ssid),               C_TEAL,   100 },
+    { "Signal:",      String(WiFi.RSSI())+" dBm", C_YELLOW, 130 },
+    { "MAC:",         WiFi.macAddress(),           C_LGRAY,  160 },
+  };
+  tft.setTextSize(1);
+  for (auto& r : rows) {
+    tft.setTextColor(C_GRAY);
+    tft.setCursor(12, r.y - 10); tft.print(r.label);
+    tft.setTextColor(r.col);
+    tft.setTextSize(r.y == 70 ? 2 : 1);
+    tft.setCursor(12, r.y); tft.print(r.value);
+    tft.setTextSize(1);
+  }
+
+  drawFooter("Connected", C_TEAL);
+}
+
+// ─── UPTIME ──────────────────────────────────────────────────
+void showUptime() {
+  state   = ST_INFO;
+  shownAt = millis();
+
+  unsigned long ms  = millis();
+  unsigned long s   = ms / 1000;
+  unsigned long m   = s / 60;
+  unsigned long h   = m / 60;
+
+  tft.fillScreen(C_BG);
+  drawBorder(C_PURPLE);
+  drawHeader("UPTIME", RGB565(18,0,35), C_PURPLE);
+
+  // Big clock
+  char clk[12];
+  snprintf(clk, sizeof(clk), "%02lu:%02lu:%02lu", h, m%60, s%60);
+  tft.setTextSize(3);
+  tft.setTextColor(C_WHITE);
+  tft.setCursor(12, 60);
+  tft.print(clk);
+
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(12, 110); tft.print("Milliseconds:");
+  tft.setTextColor(C_LGRAY);
+  tft.setCursor(12, 122); tft.print(ms);
+
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(12, 148); tft.print("ESP32 has been running");
+  tft.setTextColor(C_PURPLE);
+  tft.setCursor(12, 160); tft.print("without reboot.");
+
+  drawFooter("Stable", C_PURPLE);
+}
+
+// ════════════════════════════════════════════════════════════
+//  TELEGRAM HANDLER
+// ════════════════════════════════════════════════════════════
+
+void handleMessages(int n) {
+  for (int i = 0; i < n; i++) {
+    String text   = bot.messages[i].text;
+    String chatId = bot.messages[i].chat_id;
+    String from   = bot.messages[i].from_name;
+
+    // ── /start or /help ──
+    if (text == "/start" || text == "/help") {
+      bot.sendMessage(chatId,
+        "ESP32 Bot commands:\n\n"
+        "/heart            - Heart on display\n"
+        "/weather C T Desc - Show weather\n"
+        "/ip               - Network info\n"
+        "/uptime           - Uptime\n"
+        "/clear            - Clear display\n\n"
+        "Any text = shown on screen!", "");
+      showIdle();
+
+    // ── /heart ──
+    } else if (text == "/heart") {
+      bot.sendMessage(chatId, "Heart sent! <3", "");
+      showHeart();
+
+    // ── /weather City Temp Desc ──
+    } else if (text.startsWith("/weather")) {
+      String args = text.substring(8);
+      args.trim();
+      if (args.length() == 0) {
+        bot.sendMessage(chatId, "Usage: /weather City Temp Desc\nEx: /weather Kyiv 22 Sunny", "");
+      } else {
+        int s1 = args.indexOf(' ');
+        if (s1 > 0) {
+          w_city  = args.substring(0, s1);
+          String rest = args.substring(s1+1);
+          rest.trim();
+          int s2 = rest.indexOf(' ');
+          if (s2 > 0) {
+            w_temp = rest.substring(0, s2);
+            w_desc = rest.substring(s2+1);
+          } else {
+            w_temp = rest;
+            w_desc = "OK";
+          }
+        } else {
+          w_city = args;
+        }
+        bot.sendMessage(chatId, "Weather updated on display!", "");
+        showWeather();
+      }
+
+    // ── /ip ──
+    } else if (text == "/ip") {
+      String msg = "IP: "  + WiFi.localIP().toString() +
+                   "\nRSSI: " + String(WiFi.RSSI()) + " dBm" +
+                   "\nMAC: " + WiFi.macAddress();
+      bot.sendMessage(chatId, msg, "");
+      showIP();
+
+    // ── /uptime ──
+    } else if (text == "/uptime") {
+      unsigned long s = millis()/1000, m = s/60, h = m/60;
+      char buf[40];
+      snprintf(buf, sizeof(buf), "Uptime: %02lu:%02lu:%02lu", h, m%60, s%60);
+      bot.sendMessage(chatId, String(buf), "");
+      showUptime();
+
+    // ── /clear ──
+    } else if (text == "/clear") {
+      bot.sendMessage(chatId, "Display cleared!", "");
+      showIdle();
+
+    // ── Unknown command ──
+    } else if (text.startsWith("/")) {
+      bot.sendMessage(chatId, "Unknown command. Try /help", "");
+
+    // ── Plain text → show on display ──
+    } else {
+      bot.sendMessage(chatId, "Shown on display!", "");
+      // Pick accent color based on text length
+      uint16_t palette[] = { C_CYAN, C_YELLOW, C_GREEN, C_TEAL, C_PINK, C_BLUE };
+      uint16_t accent = palette[text.length() % 6];
+      showMessage(from, text, accent);
+    }
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+//  SETUP
+// ════════════════════════════════════════════════════════════
+void setup() {
+  Serial.begin(115200);
+
+  // Backlight on
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+
+  // Init display
+  SPI.begin(18, -1, 23, TFT_CS);
+  delay(20);
+  tft.init(SW, SH);
+  delay(100);
+  tft.setRotation(0);
+  tft.invertDisplay(false);
+  tft.fillScreen(C_BLACK);
+
+  // ── Boot screen ──────────────────────────────────────────
+  tft.fillScreen(C_BG);
+  drawBorder(C_AMBERD);
+  drawHeader("ESP32 BOT", RGB565(18,8,0), C_AMBER);
+
+  tft.setTextSize(1);
+  tft.setTextColor(C_GRAY);
+  tft.setCursor(12, 52);
+  tft.print("ST7789 240x320  |  v2.1");
+
+  tft.setTextColor(C_LGRAY);
+  tft.setCursor(12, 72);
+  tft.print("WiFi: ");
+  tft.print(ssid);
+
+  tft.setCursor(12, 88);
+  tft.setTextColor(C_AMBERD);
+  tft.print("Connecting");
+
+  WiFi.begin(ssid, password);
+  int dots = 0, tries = 0;
+  while (WiFi.status() != WL_CONNECTED && tries < 40) {
+    delay(500);
+    tft.setCursor(98 + dots*8, 88);
+    tft.setTextColor(C_AMBER);
+    tft.print(".");
+    dots++;
+    tries++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    tft.setTextColor(C_GREEN);
+    tft.setCursor(12, 108); tft.print("Connected!");
+    tft.setCursor(12, 122);
+    tft.setTextColor(C_WHITE);
+    tft.print(WiFi.localIP().toString());
+    Serial.println("WiFi OK: " + WiFi.localIP().toString());
+
+    client.setInsecure();
+    bot.sendMessage(MY_ID,
+      "ESP32 is online!\nIP: " + WiFi.localIP().toString() +
+      "\nSend /help for all commands.", "");
+  } else {
+    tft.setTextColor(C_RED);
+    tft.setCursor(12, 108);
+    tft.print("FAILED! Check SSID/password");
+    Serial.println("WiFi FAILED");
+  }
+
+  delay(2200);
+  showIdle();
+}
+
+// ════════════════════════════════════════════════════════════
+//  LOOP
+// ════════════════════════════════════════════════════════════
+void loop() {
+  // Auto-return to idle after timeout
+  if (state != ST_IDLE && millis() - shownAt > SHOW_MS) {
+    showIdle();
+  }
+
+  // Spinner on idle screen
+  if (state == ST_IDLE) {
+    tickSpinner();
+  }
+
+  // Telegram poll every 300 ms
+  if (millis() - lastPoll > POLL_MS) {
+    lastPoll = millis();
+    if (WiFi.status() == WL_CONNECTED) {
+      int n = bot.getUpdates(bot.last_message_received + 1);
+      if (n > 0) handleMessages(n);
+    } else {
+      WiFi.reconnect();
+    }
+  }
+}
